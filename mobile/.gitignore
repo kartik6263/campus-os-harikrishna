@@ -1,0 +1,14 @@
+node_modules/
+.expo/
+dist/
+web-build/
+*.log
+.DS_Store
+expo-env.d.ts
+.expo-export*
+
+# A separate, unrelated Expo starter with its own git history.
+university-os/
+
+# Local settings (copy .env.example to .env)
+.env
