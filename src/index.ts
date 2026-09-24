@@ -15,7 +15,12 @@ async function main() {
     process.exit(1);
   }
 
-  const server = app.listen(env.PORT, () => {
+  const server = app.listen(env.PORT, (err?: Error) => {
+    // Express 5 reports a failed bind (e.g. port taken) here rather than throwing.
+    if (err) {
+      console.error(`Could not start on port ${env.PORT}: ${err.message}`);
+      process.exit(1);
+    }
     console.log(`Campus OS API listening on http://localhost:${env.PORT}`);
     console.log(`Health: http://localhost:${env.PORT}/api/health`);
   });
