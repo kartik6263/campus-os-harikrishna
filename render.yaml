@@ -6,8 +6,8 @@ services:
     runtime: node
     plan: free
     buildCommand: npm install --include=dev && npm run build
-    # Tables first, demo data only on an empty database, then the server.
-    startCommand: npx prisma migrate deploy && node scripts/seed-if-empty.mjs && npm start
+    # npm start migrates, seeds an empty database, then serves.
+    startCommand: npm start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV

@@ -40,7 +40,8 @@ export function createApp() {
       // but keep browsers restricted to the configured list.
       origin(origin, cb) {
         if (!origin || env.corsOrigins.includes(origin)) return cb(null, true);
-        cb(new Error(`Origin ${origin} is not allowed by CORS`));
+        // No CORS headers, so the browser blocks it; not a 500 in the logs.
+        cb(null, false);
       },
       credentials: true,
     }),
