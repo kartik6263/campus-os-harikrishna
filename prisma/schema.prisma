@@ -104,6 +104,35 @@ model RefreshToken {
 
 // ─── Institution ──────────────────────────────────────────────────────────────
 
+/// Who this deployment belongs to. One row (id "default"), edited by an
+/// administrator from the IT console; every client reads its name, short
+/// code and contact details from here rather than from code.
+model Institution {
+  id          String   @id @default("default")
+  name        String
+  nameHi      String?
+  /// Two to five letters shown in the logo mark, e.g. "RDU".
+  shortCode   String
+  /// University, college, school, institute — shapes wording only.
+  kind        String   @default("University")
+  tagline     String?
+  address     String?
+  city        String?
+  state       String?
+  pincode     String?
+  country     String   @default("India")
+  phone       String?
+  email       String?
+  website     String?
+  /// The domain official accounts use, e.g. "demo.resolion.edu".
+  emailDomain String?
+  /// Help-desk line shown on sign-in pages.
+  helpdesk    String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("institution")
+}
+
 model College {
   id        String   @id @default(cuid())
   code      String   @unique

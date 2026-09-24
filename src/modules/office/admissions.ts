@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { institutionCode } from '../institution.js';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { prisma } from '../../db.js';
@@ -341,7 +342,7 @@ admissionsRouter.post(
     if (taken) throw ApiError.conflict('An account already exists for that email address');
 
     const year = new Date().getFullYear();
-    const enrolPrefix = `JU/${year}/${application.programme.code}/`;
+    const enrolPrefix = `${await institutionCode()}/${year}/${application.programme.code}/`;
     const existing = await prisma.student.findMany({
       where: { enrolmentNo: { startsWith: enrolPrefix } },
       select: { enrolmentNo: true },

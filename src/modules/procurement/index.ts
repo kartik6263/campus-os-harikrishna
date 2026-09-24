@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { institutionCode } from '../institution.js';
 import type { Request } from 'express';
 import { z } from 'zod';
 import { prisma } from '../../db.js';
@@ -420,7 +421,7 @@ procurementRouter.post(
     }
 
     const year = new Date().getFullYear();
-    const prefix = `JU/PROC/${year}/`;
+    const prefix = `${await institutionCode()}/PROC/${year}/`;
     const existing = await prisma.tender.findMany({
       where: { refNo: { startsWith: prefix } },
       select: { refNo: true },
@@ -826,7 +827,7 @@ procurementRouter.post(
 
     const total = body.items.reduce((sum, i) => sum + i.quantity * i.unitRate, 0);
     const year = new Date().getFullYear();
-    const prefix = `PO/JU/${year}/`;
+    const prefix = `PO/${await institutionCode()}/${year}/`;
     const existing = await prisma.purchaseOrder.findMany({
       where: { poNo: { startsWith: prefix } },
       select: { poNo: true },

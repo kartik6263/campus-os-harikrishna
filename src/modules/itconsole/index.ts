@@ -8,6 +8,7 @@ import { requireAuth, requireRole } from '../../auth/middleware.js';
 import { revokeAllForUser } from '../../auth/tokens.js';
 import { ACTIONS, MODULES, requirePermission } from './permissions.js';
 import { recordFor, verifyChain } from './audit.js';
+import { institutionInput } from '../institution.js';
 
 /**
  * Phase 9 — the IT console.
@@ -234,6 +235,40 @@ itRouter.post(
       mustChangePassword: true,
       sessionsRevoked: true,
     });
+  }),
+);
+
+// ═══ Institution settings ════════════════════════════════════════════════════
+
+// ─── PUT /api/it/institution ──────────────────────────────────────────────────
+
+/** Renames and re-addresses the whole deployment; every client follows. */
+itRouter.put(
+  '/institution',
+  requirePermission('System Config', 'edit'),
+  validate('body', institutionInput),
+  asyncHandler(async (req, res) => {
+    const input = req.body as z.infer<typeof institutionInput>;
+    // Blank optional fields are stored as null, not as empty strings.
+    const data = Object.fromEntries(
+      Object.entries(input).map(([k, v]) => [k, v === '' || v === undefined ? null : v]),
+    ) as z.infer<typeof institutionInput>;
+
+    const saved = await prisma.institution.upsert({
+      where: { id: 'default' },
+      create: { id: 'default', ...data },
+      update: data,
+    });
+
+    await recordFor(req, {
+      module: 'System Config',
+      action: 'institution-settings',
+      target: saved.name,
+      detail: `Institution profile updated (${saved.kind}, ${saved.shortCode})`,
+      outcome: 'OK',
+    });
+
+    res.json(saved);
   }),
 );
 

@@ -1,4 +1,4 @@
-# Campus OS — Backend API
+# Resolion Campus OS — Backend API
 
 Express 5 · TypeScript · Prisma 7 · PostgreSQL · JWT with refresh-token rotation.
 
@@ -40,21 +40,21 @@ All use the password **`campus123`**.
 
 | Role | Email |
 | --- | --- |
-| Student | `priya.sharma.2021@mvmgwl.ac.in` |
+| Student | `priya.sharma.2021@demo.resolion.edu` |
 | Parent | `parent.sharma@example.in` |
-| Faculty | `rk.mishra@mvmgwl.ac.in` |
-| Head of department | `ml.gupta@mvmgwl.ac.in` |
-| College office | `pushpa.sharma@mvmgwl.ac.in` |
-| Principal | `principal@mvmgwl.ac.in` |
-| Registrar | `registrar@mvmgwl.ac.in` |
-| Admin | `admin@jiwaji.ac.in` |
+| Faculty | `rk.mishra@demo.resolion.edu` |
+| Head of department | `ml.gupta@demo.resolion.edu` |
+| College office | `pushpa.sharma@demo.resolion.edu` |
+| Principal | `principal@demo.resolion.edu` |
+| Registrar | `registrar@demo.resolion.edu` |
+| Admin | `admin@demo.resolion.edu` |
 
 The other three lecturers on the timetable — `sunita.yadav@`, `anil.sharma@`
-and `kavita.jain@mvmgwl.ac.in` — also sign in, which is how the suite proves
+and `kavita.jain@demo.resolion.edu` — also sign in, which is how the suite proves
 one lecturer cannot reach another's class.
 
 The seed recreates the same record both clients previously mocked — Priya
-Sharma, BCA V Sem, MVM College Gwalior — so the API is a drop-in replacement
+Sharma, BCA V Sem, Model College Demo City — so the API is a drop-in replacement
 for the old `studentdata.ts`, not a different dataset. Phase 2 adds her twelve
 classmates, because a roster, a marks sheet and a mentee list with one student
 in them demonstrate nothing.

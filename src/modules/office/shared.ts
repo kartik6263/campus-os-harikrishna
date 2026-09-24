@@ -68,7 +68,7 @@ export function slaDeadline(type: string, priority: 'NORMAL' | 'URGENT', from = 
 }
 
 /**
- * Next number in a series, e.g. CNT/JU/2024/001142.
+ * Next number in a series, e.g. CNT/RDU/2024/001142.
  *
  * Reads the highest existing number rather than counting rows, so deleting a
  * row cannot make the next receipt reuse a number that was already issued.
