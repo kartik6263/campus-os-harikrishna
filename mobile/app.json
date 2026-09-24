@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "Campus OS",
+    "slug": "campus-os",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "campusos",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#16264A"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "in.ac.campusos.app"
+    },
+    "android": {
+      "package": "in.ac.campusos.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#16264A"
+      },
+      "edgeToEdgeEnabled": true
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-status-bar",
+      "expo-font",
+      "expo-splash-screen",
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
