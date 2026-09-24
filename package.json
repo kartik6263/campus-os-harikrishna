@@ -12,8 +12,8 @@
     "db:studio": "prisma studio",
     "generate": "prisma generate",
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
+    "build": "prisma generate && tsc -p tsconfig.json",
+    "start": "node dist/src/index.js",
     "typecheck": "tsc --noEmit",
     "test:smoke": "tsx prisma/seed.ts && node scripts/smoke.mjs"
   },
