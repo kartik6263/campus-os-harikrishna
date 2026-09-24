@@ -1,0 +1,1938 @@
+// Campus OS — database schema.
+//
+// Built in phases, each an additive migration.
+//
+//   Phase 1 — authentication and the full student domain: everything the
+//             mobile app and the web student portal need.
+//   Phase 2 — the faculty domain: teaching load, attendance marking and
+//             corrections, internal marks with an approval chain, mentoring,
+//             leave and study material.
+//   Phase 3 — the college office: admissions and document verification, the
+//             fee counter, the certificate queue and examination-form
+//             scrutiny.
+//   Phase 4 — the examination back-office: sessions and centres, seat
+//             allocation, evaluation with double valuation, result
+//             processing under embargo, and revaluation.
+//   Phase 5 — governance: the principal's dashboard and approval inbox, both
+//             aggregated from the phases below rather than stored again, plus
+//             teaching workload and the affiliation compliance file.
+//   Phase 6 — accreditation: the NAAC, NIRF, AISHE and UGC register, where a
+//             metric says whether its answer is computed from the records or
+//             typed in, plus the statutory returns calendar.
+//   Phase 7 — procurement: vendor empanelment, two-envelope tendering, award,
+//             and the purchase order through to payment.
+//   Phase 8 — right to information: applications against the statutory clock,
+//             Section 8 exemptions, deemed refusal, and the two-tier appeal.
+//   Phase 9 — the IT console: user administration, a permission matrix the
+//             route guards actually consult, and a hash-chained audit log
+//             written by the modules as they act.
+//  Phase 10 — the intelligence layer: a transparent weighted risk score over
+//             the records the phases above hold, snapshots so a score can be
+//             compared with itself, and the interventions taken on it.
+//
+// Later phases add affiliation, accreditation, procurement, RTI, the IT
+// console and the intelligence layer the same way.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Authentication & identity ────────────────────────────────────────────────
+
+enum Role {
+  STUDENT
+  PARENT
+  FACULTY
+  OFFICE
+  PRINCIPAL
+  REGISTRAR
+  ADMIN
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  role         Role
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  /// Phase 9. A locked account cannot sign in, whatever its password.
+  lockedAt           DateTime?
+  lockReason         String?
+  failedAttempts     Int       @default(0)
+  mustChangePassword Boolean   @default(false)
+
+  student       Student?       @relation("StudentUser")
+  faculty       Faculty?       @relation("FacultyUser")
+  office        OfficeStaff?   @relation("OfficeUser")
+  refreshTokens RefreshToken[]
+  auditEntries  AuditEntry[]   @relation("AuditActor")
+
+  // A parent signs in as themselves and reads their child's record.
+  wards Student[] @relation("StudentGuardian")
+
+  @@index([role])
+  @@map("users")
+}
+
+/// One row per issued refresh token, so a session can be revoked server-side
+/// and token reuse after rotation is detectable.
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  family    String
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  userAgent String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([family])
+  @@map("refresh_tokens")
+}
+
+// ─── Institution ──────────────────────────────────────────────────────────────
+
+model College {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  district  String?
+  createdAt DateTime @default(now())
+
+  programmes  Programme[]
+  students    Student[]
+  faculty     Faculty[]
+  officeStaff OfficeStaff[]
+  admissions  AdmissionApplication[]
+  compliance  ComplianceItem[]
+  governance  GovernanceRequest[]
+  returns     StatutoryReturn[]
+  vendors     Vendor[]
+  tenders     Tender[]
+  rti         RtiApplication[]
+
+  @@map("colleges")
+}
+
+model Programme {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  shortName String
+  years     Int      @default(3)
+  collegeId String?
+  createdAt DateTime @default(now())
+
+  college    College?               @relation(fields: [collegeId], references: [id])
+  students   Student[]
+  subjects   Subject[]
+  admissions AdmissionApplication[]
+
+  @@map("programmes")
+}
+
+model Student {
+  id               String    @id @default(cuid())
+  enrolmentNo      String    @unique
+  rollNo           String    @unique
+  name             String
+  nameHi           String?
+  dob              DateTime
+  gender           String?
+  category         String?
+  semester         Int
+  year             Int
+  batch            String
+  mobile           String?
+  address          String?
+  apaarId          String?   @unique
+  abcId            String?   @unique
+  abcCredits       Int       @default(0)
+  abcTarget        Int       @default(120)
+  digilockerLinked Boolean   @default(false)
+  validUpto        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  userId      String  @unique
+  collegeId   String
+  programmeId String
+  guardianId  String?
+
+  user      User      @relation("StudentUser", fields: [userId], references: [id], onDelete: Cascade)
+  college   College   @relation(fields: [collegeId], references: [id])
+  programme Programme @relation(fields: [programmeId], references: [id])
+  guardian  User?     @relation("StudentGuardian", fields: [guardianId], references: [id])
+
+  enrolments        Enrolment[]
+  attendanceRecords AttendanceRecord[]
+  feeItems          FeeItem[]
+  payments          Payment[]
+  instalments       Instalment[]
+  scholarships      ScholarshipAward[]
+  results           SemesterResult[]
+  notifications     Notification[]
+  busPass           BusPass?
+  mentorships       Mentorship[]
+  corrections       AttendanceCorrection[]
+  markEntries       MarkEntry[]
+  admission         AdmissionApplication?
+  counterReceipts   CounterReceipt[]
+  certificates      CertificateRequest[]
+  examForms         ExamForm[]
+  seatAllocations   SeatAllocation[]
+  answerScripts     AnswerScript[]
+  revaluations      RevaluationApplication[]
+  riskAssessments   RiskAssessment[]
+  interventions     Intervention[]
+
+  @@index([collegeId])
+  @@index([programmeId])
+  @@map("students")
+}
+
+// ─── Academics: subjects, enrolment, attendance, timetable ────────────────────
+
+model Subject {
+  id          String @id @default(cuid())
+  code        String @unique
+  name        String
+  credits     Int
+  semester    Int
+  programmeId String
+
+  programme Programme @relation(fields: [programmeId], references: [id])
+
+  enrolments     Enrolment[]
+  timetableSlots TimetableSlot[]
+  classSessions  ClassSession[]
+  subjectResults SubjectResult[]
+  assignments    SubjectAssignment[]
+  materials      StudyMaterial[]
+  examFormRows   ExamFormSubject[]
+  examPapers     ExamPaper[]
+
+  @@index([programmeId, semester])
+  @@map("subjects")
+}
+
+/// A student taking a subject in a given term, with the faculty and room.
+model Enrolment {
+  id        String  @id @default(cuid())
+  studentId String
+  subjectId String
+  /// Display name, kept so student screens render without a join.
+  faculty   String
+  facultyId String?
+  room      String
+  term      String
+
+  student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subject     Subject  @relation(fields: [subjectId], references: [id])
+  facultyUser Faculty? @relation(fields: [facultyId], references: [id])
+
+  @@unique([studentId, subjectId, term])
+  @@map("enrolments")
+}
+
+enum Weekday {
+  MON
+  TUE
+  WED
+  THU
+  FRI
+  SAT
+}
+
+model TimetableSlot {
+  id           String    @id @default(cuid())
+  subjectId    String
+  day          Weekday
+  startTime    String
+  endTime      String
+  room         String
+  faculty      String
+  facultyId    String?
+  term         String
+  cancelled    Boolean   @default(false)
+  cancelReason String?
+  cancelledAt  DateTime?
+
+  subject     Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  facultyUser Faculty? @relation(fields: [facultyId], references: [id])
+
+  @@index([subjectId, day])
+  @@index([facultyId, day])
+  @@map("timetable_slots")
+}
+
+/// One conducted class. Attendance rows hang off this, so "held" counts are
+/// derived rather than stored as a denormalised total.
+model ClassSession {
+  id          String    @id @default(cuid())
+  subjectId   String
+  date        DateTime
+  startTime   String
+  endTime     String
+  room        String
+  faculty     String
+  facultyId   String?
+  /// Rotating token for QR attendance; null when the window is closed.
+  qrToken     String?   @unique
+  qrExpiresAt DateTime?
+  /// Set when faculty completes the roll call. The sheet locks
+  /// `ATTENDANCE_LOCK_HOURS` after this, after which only an approved
+  /// correction can change a record.
+  markedAt    DateTime?
+  markedById  String?
+
+  subject     Subject                @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  facultyUser Faculty?               @relation(fields: [facultyId], references: [id])
+  markedBy    Faculty?               @relation("SessionMarkedBy", fields: [markedById], references: [id])
+  records     AttendanceRecord[]
+  corrections AttendanceCorrection[]
+
+  /// One roll call per slot per day, so a sheet cannot be opened twice.
+  @@unique([subjectId, date, startTime])
+  @@index([subjectId, date])
+  @@index([facultyId, date])
+  @@map("class_sessions")
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
+
+model AttendanceRecord {
+  id        String           @id @default(cuid())
+  studentId String
+  sessionId String
+  status    AttendanceStatus
+  markedAt  DateTime         @default(now())
+  /// QR, manual (faculty), or an approved correction.
+  source    String           @default("MANUAL")
+
+  student Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  session ClassSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, sessionId])
+  @@index([studentId])
+  @@map("attendance_records")
+}
+
+// ─── Finance ──────────────────────────────────────────────────────────────────
+
+enum FeeCategory {
+  TUITION
+  DEVELOPMENT
+  EXAM
+  OTHER
+}
+
+/// A single charge on a student's account.
+model FeeItem {
+  id        String      @id @default(cuid())
+  studentId String
+  head      String
+  amount    Int
+  paid      Int         @default(0)
+  category  FeeCategory
+  term      String
+  dueDate   DateTime?
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, term])
+  @@map("fee_items")
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+model Payment {
+  id           String        @id @default(cuid())
+  studentId    String
+  head         String
+  /// Negative for credits such as a scholarship adjustment.
+  amount       Int
+  mode         String
+  txnId        String        @unique
+  receiptNo    String?       @unique
+  status       PaymentStatus @default(PENDING)
+  paidAt       DateTime      @default(now())
+  instalmentId String?       @unique
+
+  student    Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  instalment Instalment?     @relation(fields: [instalmentId], references: [id])
+  receipt    CounterReceipt?
+
+  @@index([studentId])
+  @@map("payments")
+}
+
+model Instalment {
+  id        String    @id @default(cuid())
+  studentId String
+  number    Int
+  amount    Int
+  dueDate   DateTime
+  paidAt    DateTime?
+  term      String
+
+  student Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  payment Payment?
+
+  @@unique([studentId, term, number])
+  @@map("instalments")
+}
+
+model ScholarshipAward {
+  id         String    @id @default(cuid())
+  studentId  String
+  name       String
+  amount     Int
+  adjusted   Boolean   @default(false)
+  adjustedAt DateTime?
+  term       String
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId])
+  @@map("scholarship_awards")
+}
+
+// ─── Examination results ──────────────────────────────────────────────────────
+
+enum ResultOutcome {
+  PASS
+  FAIL
+  WITHHELD
+}
+
+model SemesterResult {
+  id           String        @id @default(cuid())
+  studentId    String
+  semester     Int
+  declaredOn   String
+  sgpa         Float
+  cgpa         Float
+  totalCredits Int
+  outcome      ResultOutcome
+  publishedAt  DateTime      @default(now())
+
+  /// Phase 4: a result is computed before it is released. Defaults true so
+  /// the results Phase 1 seeded stay visible.
+  published  Boolean @default(true)
+  /// Which sitting produced it; null for results that predate Phase 4.
+  sessionId  String?
+  division   String?
+  graceMarks Int     @default(0)
+
+  student  Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  session  ExamSession?    @relation(fields: [sessionId], references: [id])
+  subjects SubjectResult[]
+
+  @@unique([studentId, semester])
+  @@map("semester_results")
+}
+
+model SubjectResult {
+  id         String  @id @default(cuid())
+  resultId   String
+  subjectId  String
+  internal   Int
+  external   Int
+  total      Int
+  grade      String
+  passed     Boolean
+  /// Phase 4: marks added under the grace rules, counted in the total.
+  graceGiven Int     @default(0)
+
+  result  SemesterResult @relation(fields: [resultId], references: [id], onDelete: Cascade)
+  subject Subject        @relation(fields: [subjectId], references: [id])
+
+  @@unique([resultId, subjectId])
+  @@map("subject_results")
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+enum NotificationKind {
+  ATTENDANCE
+  FEE
+  RESULT
+  EXAM
+  GENERAL
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  studentId String
+  kind      NotificationKind
+  title     String
+  titleHi   String?
+  body      String
+  bodyHi    String?
+  urgent    Boolean          @default(false)
+  href      String?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, readAt])
+  @@map("notifications")
+}
+
+// ─── Transport ────────────────────────────────────────────────────────────────
+
+model TransportRoute {
+  id          String   @id @default(cuid())
+  routeNo     String   @unique
+  name        String
+  busNo       String
+  driver      String
+  driverPhone String
+  /// Index of the last stop the bus cleared; a GPS feed would update this.
+  currentStop Int      @default(0)
+  updatedAt   DateTime @updatedAt
+
+  stops  RouteStop[]
+  passes BusPass[]
+
+  @@map("transport_routes")
+}
+
+model RouteStop {
+  id      String @id @default(cuid())
+  routeId String
+  name    String
+  time    String
+  order   Int
+
+  route TransportRoute @relation(fields: [routeId], references: [id], onDelete: Cascade)
+
+  @@unique([routeId, order])
+  @@map("route_stops")
+}
+
+model BusPass {
+  id        String   @id @default(cuid())
+  studentId String   @unique
+  routeId   String
+  valid     Boolean  @default(true)
+  validTill DateTime
+
+  student Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  route   TransportRoute @relation(fields: [routeId], references: [id])
+
+  @@map("bus_passes")
+}
+
+// ─── Announcements ────────────────────────────────────────────────────────────
+
+enum AnnouncementScope {
+  UNIVERSITY
+  COLLEGE
+  DEPARTMENT
+  BATCH
+}
+
+model Announcement {
+  id          String            @id @default(cuid())
+  scope       AnnouncementScope
+  title       String
+  body        String
+  urgent      Boolean           @default(false)
+  publishedAt DateTime          @default(now())
+
+  @@index([scope, publishedAt])
+  @@map("announcements")
+}
+
+// ═══ Phase 2 — the faculty domain ═════════════════════════════════════════════
+
+/// A member of teaching staff. The display strings on Enrolment, TimetableSlot
+/// and ClassSession stay as they are; this record is what faculty endpoints
+/// scope by, so one lecturer can never read another's roster or marks.
+model Faculty {
+  id             String   @id @default(cuid())
+  employeeId     String   @unique
+  /// University-wide teacher code (EMP/JU/TC/####), distinct from the
+  /// college's own employee number.
+  teacherCode    String?  @unique
+  name           String
+  nameHi         String?
+  designation    String
+  department     String
+  mobile         String?
+  joinDate       DateTime
+  specialization String?
+  /// Weekly teaching hours the workload rules allow.
+  maxWeeklyLoad  Int      @default(18)
+  /// Heads of department approve marks and leave for their department.
+  isHod          Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  userId    String @unique
+  collegeId String
+
+  user    User    @relation("FacultyUser", fields: [userId], references: [id], onDelete: Cascade)
+  college College @relation(fields: [collegeId], references: [id])
+
+  assignments         SubjectAssignment[]
+  enrolments          Enrolment[]
+  timetableSlots      TimetableSlot[]
+  classSessions       ClassSession[]
+  sessionsMarked      ClassSession[]         @relation("SessionMarkedBy")
+  corrections         AttendanceCorrection[] @relation("CorrectionDecidedBy")
+  mentorships         Mentorship[]
+  mentorNotes         MentorNote[]
+  leaves              FacultyLeave[]
+  leavesDecided       FacultyLeave[]         @relation("LeaveDecidedBy")
+  materials           StudyMaterial[]
+  sheetsDecided       MarksSheet[]           @relation("SheetDecidedBy")
+  complianceReviewed  ComplianceItem[]       @relation("ComplianceReviewedBy")
+  metricsUpdated      AccreditationMetric[]  @relation("MetricUpdatedBy")
+  governanceRaised    GovernanceRequest[]    @relation("GovernanceRaisedBy")
+  governanceDecided   GovernanceRequest[]    @relation("GovernanceDecidedBy")
+  tendersRaised       Tender[]               @relation("TenderRaisedBy")
+  interventionsRaised Intervention[]         @relation("InterventionRaisedBy")
+
+  @@index([collegeId, department])
+  @@map("faculty")
+}
+
+enum SubjectKind {
+  THEORY
+  LAB
+  PROJECT
+}
+
+/// One subject taught by one lecturer to one section in one term. This is the
+/// unit everything else in the faculty domain hangs off: the roster, the
+/// attendance sheet and the marks sheet are all per assignment, not per
+/// subject, so two sections of the same paper stay separate.
+model SubjectAssignment {
+  id         String      @id @default(cuid())
+  facultyId  String
+  subjectId  String
+  term       String
+  section    String      @default("A")
+  /// Rendered label — "BCA V Sem A".
+  classLabel String
+  room       String
+  kind       SubjectKind @default(THEORY)
+  createdAt  DateTime    @default(now())
+
+  faculty Faculty @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  components MarksComponent[]
+  marksSheet MarksSheet?
+
+  @@unique([facultyId, subjectId, term, section])
+  @@index([subjectId, term])
+  @@map("subject_assignments")
+}
+
+// ─── Attendance corrections ───────────────────────────────────────────────────
+
+enum CorrectionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// A student disputing one day's attendance. Approving it rewrites the
+/// underlying record inside a transaction, so the percentage the student sees
+/// and the decision the lecturer made can never disagree.
+model AttendanceCorrection {
+  id              String           @id @default(cuid())
+  studentId       String
+  sessionId       String
+  /// What the record said when the request was raised.
+  markedAs        AttendanceStatus
+  requestedStatus AttendanceStatus
+  reason          String
+  attachment      String?
+  status          CorrectionStatus @default(PENDING)
+  raisedAt        DateTime         @default(now())
+  decidedAt       DateTime?
+  decidedById     String?
+  decisionNote    String?
+
+  student   Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  session   ClassSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  decidedBy Faculty?     @relation("CorrectionDecidedBy", fields: [decidedById], references: [id])
+
+  /// One request per student per class, so a rejected one is not re-raised.
+  @@unique([studentId, sessionId])
+  @@index([status, raisedAt])
+  @@map("attendance_corrections")
+}
+
+// ─── Internal marks ───────────────────────────────────────────────────────────
+
+enum MarksSheetStatus {
+  NOT_STARTED
+  DRAFT
+  SUBMITTED
+  APPROVED
+  RETURNED
+}
+
+/// One scoring component — "Assignment 1", "Viva Voce". The set differs by
+/// subject kind, so it is stored per assignment rather than hard-coded.
+model MarksComponent {
+  id           String  @id @default(cuid())
+  assignmentId String
+  key          String
+  label        String
+  maxMarks     Int
+  description  String?
+  order        Int     @default(0)
+
+  assignment SubjectAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  entries    MarkEntry[]
+
+  @@unique([assignmentId, key])
+  @@map("marks_components")
+}
+
+/// The sheet a lecturer fills and the head of department approves. Its status
+/// is the whole workflow: NOT_STARTED to DRAFT to SUBMITTED to APPROVED, or
+/// back to RETURNED with a reason.
+model MarksSheet {
+  id           String           @id @default(cuid())
+  assignmentId String           @unique
+  status       MarksSheetStatus @default(NOT_STARTED)
+  submittedAt  DateTime?
+  decidedAt    DateTime?
+  decidedById  String?
+  returnReason String?
+  updatedAt    DateTime         @updatedAt
+
+  assignment SubjectAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  decidedBy  Faculty?          @relation("SheetDecidedBy", fields: [decidedById], references: [id])
+  entries    MarkEntry[]
+
+  @@map("marks_sheets")
+}
+
+model MarkEntry {
+  id          String   @id @default(cuid())
+  sheetId     String
+  studentId   String
+  componentId String
+  /// Null means not yet scored, which is distinct from a zero.
+  value       Int?
+  updatedAt   DateTime @updatedAt
+
+  sheet     MarksSheet     @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  student   Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  component MarksComponent @relation(fields: [componentId], references: [id], onDelete: Cascade)
+
+  @@unique([sheetId, studentId, componentId])
+  @@index([sheetId, studentId])
+  @@map("mark_entries")
+}
+
+// ─── Mentoring ────────────────────────────────────────────────────────────────
+
+/// A mentor-mentee pairing. The at-risk flag and its reasons are derived from
+/// live attendance and results on read, never stored, so they cannot go stale.
+model Mentorship {
+  id                String    @id @default(cuid())
+  facultyId         String
+  studentId         String
+  assignedAt        DateTime  @default(now())
+  lastInteractionAt DateTime?
+
+  faculty Faculty      @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+  student Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  notes   MentorNote[]
+
+  @@unique([facultyId, studentId])
+  @@map("mentorships")
+}
+
+model MentorNote {
+  id           String   @id @default(cuid())
+  mentorshipId String
+  authorId     String
+  note         String
+  createdAt    DateTime @default(now())
+
+  mentorship Mentorship @relation(fields: [mentorshipId], references: [id], onDelete: Cascade)
+  author     Faculty    @relation(fields: [authorId], references: [id])
+
+  @@index([mentorshipId, createdAt])
+  @@map("mentor_notes")
+}
+
+// ─── Leave ────────────────────────────────────────────────────────────────────
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum LeaveKind {
+  CASUAL
+  MEDICAL
+  EARNED
+  STUDY
+  DUTY
+  MATERNITY
+  UNPAID
+}
+
+model FacultyLeave {
+  id           String      @id @default(cuid())
+  facultyId    String
+  kind         LeaveKind
+  fromDate     DateTime
+  toDate       DateTime
+  /// Inclusive day count, computed on write so listings need no arithmetic.
+  days         Int
+  reason       String
+  substitute   String?
+  status       LeaveStatus @default(PENDING)
+  appliedAt    DateTime    @default(now())
+  decidedAt    DateTime?
+  decidedById  String?
+  decisionNote String?
+
+  faculty   Faculty  @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+  decidedBy Faculty? @relation("LeaveDecidedBy", fields: [decidedById], references: [id])
+
+  @@index([facultyId, appliedAt])
+  @@index([status])
+  @@map("faculty_leaves")
+}
+
+// ─── Study material ───────────────────────────────────────────────────────────
+
+enum MaterialType {
+  PDF
+  PPT
+  VIDEO
+  LINK
+}
+
+/// Material metadata. The bytes live wherever `url` points — this phase stores
+/// no uploads, so a row without a url is a placeholder.
+model StudyMaterial {
+  id                String       @id @default(cuid())
+  facultyId         String
+  subjectId         String
+  unit              Int
+  unitTitle         String
+  filename          String
+  url               String?
+  type              MaterialType
+  sizeLabel         String?
+  visibleToStudents Boolean      @default(true)
+  uploadedAt        DateTime     @default(now())
+
+  faculty Faculty @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@index([subjectId, unit])
+  @@index([facultyId])
+  @@map("study_materials")
+}
+
+// ═══ Phase 3 — the college office ════════════════════════════════════════════
+
+/// Non-teaching staff: the people behind the admission, fee and certificate
+/// counters. Separate from Faculty because they have no teaching load, no
+/// mentees and no marks to submit — only a counter and a signature.
+model OfficeStaff {
+  id          String   @id @default(cuid())
+  employeeId  String   @unique
+  name        String
+  nameHi      String?
+  designation String
+  /// Which window they sit at, when that is fixed.
+  counter     String?
+  mobile      String?
+  createdAt   DateTime @default(now())
+
+  userId    String @unique
+  collegeId String
+
+  user    User    @relation("OfficeUser", fields: [userId], references: [id], onDelete: Cascade)
+  college College @relation(fields: [collegeId], references: [id])
+
+  documentsVerified AdmissionDocument[]
+  receipts          CounterReceipt[]
+  rtiApplications   RtiApplication[]     @relation("RtiPio")
+  appealsDecided    RtiAppeal[]          @relation("AppealDecidedBy")
+  certificates      CertificateRequest[] @relation("CertificateIssuedBy")
+  examFormsChecked  ExamForm[]
+
+  @@index([collegeId])
+  @@map("office_staff")
+}
+
+// ─── Admissions ───────────────────────────────────────────────────────────────
+
+enum AdmissionStatus {
+  PENDING_DOCS
+  VERIFIED
+  ENROLLED
+  REJECTED
+}
+
+/// An applicant at the admission counter, before they are a student.
+///
+/// Becoming a Student is a deliberate step (`enrol`), not a side effect of
+/// filling the form: it happens only once every required document is verified
+/// and the fee is settled.
+model AdmissionApplication {
+  id            String          @id @default(cuid())
+  applicationNo String          @unique
+  name          String
+  nameHi        String?
+  dob           DateTime
+  gender        String?
+  category      String?
+  mobile        String?
+  email         String?
+  meritRank     Int?
+  admissionDate DateTime        @default(now())
+  status        AdmissionStatus @default(PENDING_DOCS)
+  rejectReason  String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  collegeId   String
+  programmeId String
+  /// Set when the application becomes a student record.
+  studentId   String? @unique
+
+  college   College   @relation(fields: [collegeId], references: [id])
+  programme Programme @relation(fields: [programmeId], references: [id])
+  student   Student?  @relation(fields: [studentId], references: [id])
+
+  documents AdmissionDocument[]
+
+  @@index([collegeId, status])
+  @@map("admission_applications")
+}
+
+/// One row on the document checklist. `required` is captured per application,
+/// because which papers a candidate must produce depends on their category.
+model AdmissionDocument {
+  id            String    @id @default(cuid())
+  applicationId String
+  name          String
+  required      Boolean   @default(true)
+  uploaded      Boolean   @default(false)
+  verified      Boolean   @default(false)
+  verifiedById  String?
+  verifiedAt    DateTime?
+  remarks       String?
+
+  application AdmissionApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  verifiedBy  OfficeStaff?         @relation(fields: [verifiedById], references: [id])
+
+  @@unique([applicationId, name])
+  @@map("admission_documents")
+}
+
+// ─── The fee counter ──────────────────────────────────────────────────────────
+
+enum ReceiptStatus {
+  COMPLETE
+  PENDING_CLEARANCE
+  BOUNCED
+}
+
+/// Money taken across the counter.
+///
+/// Every receipt writes a Payment against the student in the same transaction,
+/// so a payment made at the window shows on the student's own fee screen
+/// immediately — there is one ledger, not a counter ledger and an app ledger.
+model CounterReceipt {
+  id         String        @id @default(cuid())
+  receiptNo  String        @unique
+  studentId  String
+  head       String
+  amount     Int
+  /// CASH, CHEQUE, UPI, DD, CARD, NEFT.
+  mode       String
+  /// Cheque number, UPI reference or DD number, as the mode requires.
+  instrument String?
+  status     ReceiptStatus @default(COMPLETE)
+  /// Set when a cheque or DD clears, or bounces.
+  settledAt  DateTime?
+  receivedAt DateTime      @default(now())
+  remarks    String?
+
+  receivedById String
+  paymentId    String @unique
+
+  student    Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  receivedBy OfficeStaff @relation(fields: [receivedById], references: [id])
+  payment    Payment     @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId])
+  @@index([receivedAt])
+  @@map("counter_receipts")
+}
+
+// ─── Certificates ─────────────────────────────────────────────────────────────
+
+enum CertificateStage {
+  REQUESTED
+  COLLEGE_OFFICE
+  READY
+  DISPATCHED
+  REJECTED
+}
+
+enum CertificatePriority {
+  NORMAL
+  URGENT
+}
+
+/// A certificate a student has asked for, and the clock it is running against.
+///
+/// The deadline is stored rather than derived because the service standard can
+/// change, and a request must keep the promise it was made under.
+model CertificateRequest {
+  id           String              @id @default(cuid())
+  requestNo    String              @unique
+  studentId    String
+  type         String
+  purpose      String
+  priority     CertificatePriority @default(NORMAL)
+  stage        CertificateStage    @default(REQUESTED)
+  fee          Int                 @default(0)
+  feePaid      Boolean             @default(false)
+  requestedAt  DateTime            @default(now())
+  slaDeadline  DateTime
+  notes        String?
+  issuedById   String?
+  issuedAt     DateTime?
+  rejectReason String?
+
+  student  Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  issuedBy OfficeStaff? @relation("CertificateIssuedBy", fields: [issuedById], references: [id])
+
+  @@index([stage, slaDeadline])
+  @@index([studentId])
+  @@map("certificate_requests")
+}
+
+// ─── Examination forms ────────────────────────────────────────────────────────
+
+enum ExamFormEligibility {
+  PENDING
+  ELIGIBLE
+  SHORTAGE
+  FEE_DUE
+  CLEARED
+}
+
+/// A student's examination form, and the scrutiny it has to pass.
+///
+/// Eligibility is recomputed from live attendance and the fee ledger whenever
+/// the form is read, so the clerk is never deciding on a stale number; the
+/// stored value records what was decided, not what is currently true.
+model ExamForm {
+  id              String              @id @default(cuid())
+  formNo          String              @unique
+  studentId       String
+  semester        Int
+  term            String
+  submittedAt     DateTime            @default(now())
+  eligibility     ExamFormEligibility @default(PENDING)
+  remarks         String?
+  scrutinisedById String?
+  scrutinisedAt   DateTime?
+
+  student       Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  scrutinisedBy OfficeStaff?      @relation(fields: [scrutinisedById], references: [id])
+  subjects      ExamFormSubject[]
+
+  @@unique([studentId, semester, term])
+  @@index([eligibility])
+  @@map("exam_forms")
+}
+
+enum ExamSubjectKind {
+  REGULAR
+  BACKLOG
+}
+
+model ExamFormSubject {
+  id        String          @id @default(cuid())
+  formId    String
+  subjectId String
+  kind      ExamSubjectKind @default(REGULAR)
+
+  form    ExamForm @relation(fields: [formId], references: [id], onDelete: Cascade)
+  subject Subject  @relation(fields: [subjectId], references: [id])
+
+  @@unique([formId, subjectId])
+  @@map("exam_form_subjects")
+}
+
+// ═══ Phase 4 — the examination back-office ═══════════════════════════════════
+
+enum ExamSessionStatus {
+  PLANNED
+  FORM_WINDOW_OPEN
+  FORM_WINDOW_CLOSED
+  IN_PROGRESS
+  EVALUATION
+  RESULT_PROCESSING
+  RESULT_PUBLISHED
+}
+
+/// One examination sitting — "Nov–Dec 2024 (Odd Semester)".
+///
+/// The status is the session's whole lifecycle, and the back-office routes
+/// refuse work that is out of step with it: scripts cannot be evaluated
+/// before the papers are sat, results cannot be processed mid-evaluation.
+model ExamSession {
+  id           String            @id @default(cuid())
+  code         String            @unique
+  name         String
+  academicYear String
+  status       ExamSessionStatus @default(PLANNED)
+
+  formOpensOn    DateTime
+  formClosesOn   DateTime
+  lateClosesOn   DateTime
+  examStartsOn   DateTime
+  examEndsOn     DateTime
+  resultTargetOn DateTime
+
+  regularFee Int @default(1800)
+  lateFee    Int @default(500)
+  backlogFee Int @default(300)
+
+  /// Set when results are released; until then they are computed but embargoed.
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  papers      ExamPaper[]
+  allocations SeatAllocation[]
+  results     SemesterResult[]
+
+  @@map("exam_sessions")
+}
+
+/// A hall students are seated in. Capacity is the number the fire officer
+/// signed off, so allocation refuses to exceed it.
+model ExamCentre {
+  id       String  @id @default(cuid())
+  code     String  @unique
+  name     String
+  city     String
+  district String
+  pincode  String?
+  capacity Int
+
+  allocations SeatAllocation[]
+  bundles     AnswerBundle[]
+
+  @@map("exam_centres")
+}
+
+model SeatAllocation {
+  id          String   @id @default(cuid())
+  sessionId   String
+  studentId   String
+  centreId    String
+  seatNo      String?
+  allocatedAt DateTime @default(now())
+
+  session ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  student Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  centre  ExamCentre  @relation(fields: [centreId], references: [id])
+
+  @@unique([sessionId, studentId])
+  @@index([centreId])
+  @@map("seat_allocations")
+}
+
+/// A subject's paper in a session: when it is sat, and what it is out of.
+model ExamPaper {
+  id           String    @id @default(cuid())
+  sessionId    String
+  subjectId    String
+  examDate     DateTime
+  examTime     String    @default("10:00–13:00")
+  maxExternal  Int       @default(70)
+  maxInternal  Int       @default(30)
+  /// Question papers dispatched to centres under seal.
+  dispatchedAt DateTime?
+
+  session ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  subject Subject     @relation(fields: [subjectId], references: [id])
+
+  bundles      AnswerBundle[]
+  scripts      AnswerScript[]
+  revaluations RevaluationApplication[]
+
+  @@unique([sessionId, subjectId])
+  @@index([examDate])
+  @@map("exam_papers")
+}
+
+enum BundleStatus {
+  UNASSIGNED
+  RECEIVED
+  UNDER_EVALUATION
+  SUBMITTED
+  MODERATED
+}
+
+enum ExaminerRole {
+  E1
+  E2
+  MODERATOR
+}
+
+/// A physical bundle of answer scripts handed to one examiner.
+///
+/// The bundle is how paper moves; the marks live on the script, because the
+/// same script is seen by a first examiner, a second, and sometimes a
+/// moderator, and all three readings have to sit side by side.
+model AnswerBundle {
+  id       String       @id @default(cuid())
+  bundleNo String       @unique
+  paperId  String
+  centreId String
+  status   BundleStatus @default(UNASSIGNED)
+
+  examinerName String?
+  examinerRole ExaminerRole @default(E1)
+  assignedAt   DateTime?
+  submittedAt  DateTime?
+
+  paper  ExamPaper  @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  centre ExamCentre @relation(fields: [centreId], references: [id])
+
+  scripts AnswerScript[]
+
+  @@index([paperId, status])
+  @@map("answer_bundles")
+}
+
+/// One student's answer script for one paper.
+///
+/// `finalMark` is derived on submission rather than typed: the average of two
+/// readings, or the moderator's when they disagree by more than the tolerance.
+/// Storing it means a published result never has to re-derive itself.
+model AnswerScript {
+  id        String  @id @default(cuid())
+  paperId   String
+  studentId String
+  bundleId  String?
+
+  e1            Int?
+  e2            Int?
+  moderatorMark Int?
+  finalMark     Int?
+
+  /// Set when the two readings differ by more than the tolerance.
+  flagged    Boolean @default(false)
+  flagReason String?
+  absent     Boolean @default(false)
+
+  paper   ExamPaper     @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  student Student       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  bundle  AnswerBundle? @relation(fields: [bundleId], references: [id])
+
+  @@unique([paperId, studentId])
+  @@index([flagged])
+  @@map("answer_scripts")
+}
+
+// ─── Revaluation ──────────────────────────────────────────────────────────────
+
+enum RevaluationStatus {
+  APPLIED
+  UNDER_REVALUATION
+  COMPLETED
+  REJECTED
+}
+
+/// A challenge to a published mark.
+///
+/// A revaluation that changes the mark rewrites the published result, so the
+/// two can never disagree; one that does not is still recorded, because the
+/// student paid for the reading.
+model RevaluationApplication {
+  id            String            @id @default(cuid())
+  applicationNo String            @unique
+  studentId     String
+  paperId       String
+  appliedAt     DateTime          @default(now())
+  fee           Int               @default(500)
+  feePaid       Boolean           @default(false)
+  status        RevaluationStatus @default(APPLIED)
+
+  originalMark Int?
+  revisedMark  Int?
+  changed      Boolean   @default(false)
+  completedAt  DateTime?
+  remarks      String?
+
+  student Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  paper   ExamPaper @relation(fields: [paperId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, paperId])
+  @@index([status])
+  @@map("revaluation_applications")
+}
+
+// ═══ Phase 5 — governance ════════════════════════════════════════════════════
+
+enum ComplianceStatus {
+  COMPLIANT
+  PARTIAL
+  NON_COMPLIANT
+  NOT_APPLICABLE
+}
+
+/// One requirement the college is held to by a regulator.
+///
+/// The affiliation file is a checklist, not a score: each row names who
+/// requires it, what evidence satisfies it, and when it was last looked at.
+model ComplianceItem {
+  id             String           @id @default(cuid())
+  code           String           @unique
+  category       String
+  requirement    String
+  /// UGC, NAAC, AICTE, or the affiliating university.
+  authority      String
+  status         ComplianceStatus @default(NON_COMPLIANT)
+  evidence       String?
+  remarks        String?
+  dueOn          DateTime?
+  lastReviewedAt DateTime?
+  reviewedById   String?
+  collegeId      String
+
+  college    College  @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+  reviewedBy Faculty? @relation("ComplianceReviewedBy", fields: [reviewedById], references: [id])
+
+  @@index([collegeId, status])
+  @@map("compliance_items")
+}
+
+enum GovernanceKind {
+  BUDGET
+  EVENT
+  INFRASTRUCTURE
+  PROCUREMENT
+  POLICY
+  OTHER
+}
+
+enum GovernanceStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum GovernancePriority {
+  LOW
+  NORMAL
+  HIGH
+}
+
+/// Something that needs the principal's signature and is not a leave
+/// application or a marks sheet — a budget line, an event, a building.
+///
+/// Leave and marks stay where they are, in the faculty domain; the approval
+/// inbox gathers all three on read rather than copying them here.
+model GovernanceRequest {
+  id           String             @id @default(cuid())
+  requestNo    String             @unique
+  kind         GovernanceKind
+  subject      String
+  details      String
+  amount       Int?
+  priority     GovernancePriority @default(NORMAL)
+  status       GovernanceStatus   @default(PENDING)
+  raisedAt     DateTime           @default(now())
+  slaDeadline  DateTime
+  decidedAt    DateTime?
+  decisionNote String?
+
+  collegeId   String
+  raisedById  String
+  decidedById String?
+
+  college   College  @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+  raisedBy  Faculty  @relation("GovernanceRaisedBy", fields: [raisedById], references: [id])
+  tenders   Tender[]
+  decidedBy Faculty? @relation("GovernanceDecidedBy", fields: [decidedById], references: [id])
+
+  @@index([collegeId, status])
+  @@index([slaDeadline])
+  @@map("governance_requests")
+}
+
+// ═══ Phase 6 — accreditation ═════════════════════════════════════════════════
+
+/// A body the institution reports to: NAAC, NIRF, AISHE, the UGC.
+model AccreditationFramework {
+  id          String  @id @default(cuid())
+  code        String  @unique
+  name        String
+  description String?
+  /// The scoring maximum, where the framework has one (NIRF does, NAAC does not).
+  maxScore    Float?
+
+  metrics AccreditationMetric[]
+  returns StatutoryReturn[]
+
+  @@map("accreditation_frameworks")
+}
+
+enum MetricSource {
+  /// Computed from the system's own records on every read.
+  DERIVED
+  /// Typed in, because the system does not hold what it asks for.
+  ENTERED
+  /// Nothing to answer it with yet, and nobody has entered it.
+  UNAVAILABLE
+}
+
+/// One question a framework asks.
+///
+/// The point of the register is that a metric says where its answer comes
+/// from. A derived metric is recomputed on read and can name the rows it
+/// counted; an entered one carries a person and a date. A metric is never
+/// both — hand-entering a figure the system computes is how a file stops
+/// matching the records behind it.
+model AccreditationMetric {
+  id             String       @id @default(cuid())
+  frameworkId    String
+  code           String
+  criterion      Int?
+  criterionTitle String?
+  title          String
+  description    String?
+  /// What the framework expects: "≥25%", "≤30:1", "All programmes".
+  target         String?
+  maxScore       Float?
+  source         MetricSource @default(UNAVAILABLE)
+
+  /// Names the computation that answers it, when derived.
+  derivedFrom  String?
+  /// The answer, when it was typed in rather than computed.
+  enteredValue String?
+  enteredScore Float?
+
+  evidence    String?
+  remarks     String?
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+
+  framework AccreditationFramework @relation(fields: [frameworkId], references: [id], onDelete: Cascade)
+  updatedBy Faculty?               @relation("MetricUpdatedBy", fields: [updatedById], references: [id])
+
+  @@unique([frameworkId, code])
+  @@index([frameworkId, criterion])
+  @@map("accreditation_metrics")
+}
+
+/// A return the institution owes a regulator by a date.
+///
+/// Whether it is overdue is read off the calendar, not stored — a status
+/// column would go stale the moment the date passed.
+model StatutoryReturn {
+  id          String    @id @default(cuid())
+  frameworkId String
+  code        String    @unique
+  name        String
+  dueOn       DateTime
+  submittedOn DateTime?
+  reference   String?
+  remarks     String?
+  collegeId   String
+
+  framework AccreditationFramework @relation(fields: [frameworkId], references: [id], onDelete: Cascade)
+  college   College                @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+
+  @@index([collegeId, dueOn])
+  @@map("statutory_returns")
+}
+
+// ═══ Phase 7 — procurement ═══════════════════════════════════════════════════
+
+enum VendorStatus {
+  PENDING
+  EMPANELLED
+  BLACKLISTED
+  SUSPENDED
+}
+
+/// A supplier on the university's register.
+///
+/// Only an empanelled vendor may bid, so this row is the gate at the front of
+/// the whole process rather than a directory beside it.
+model Vendor {
+  id                String       @id @default(cuid())
+  code              String       @unique
+  name              String
+  gstin             String       @unique
+  pan               String
+  categories        String[]
+  contactName       String
+  contactMobile     String
+  email             String
+  status            VendorStatus @default(PENDING)
+  documentsVerified Boolean      @default(false)
+  registeredOn      DateTime     @default(now())
+  empanelledUpto    DateTime?
+  statusReason      String?
+  collegeId         String
+
+  college College         @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+  bids    TenderBid[]
+  orders  PurchaseOrder[]
+
+  @@index([collegeId, status])
+  @@map("vendors")
+}
+
+enum TenderStatus {
+  DRAFT
+  PUBLISHED
+  CORRIGENDUM
+  BID_OPEN
+  EVALUATION
+  AWARDED
+  CANCELLED
+}
+
+/// A tender, from drafting to award.
+///
+/// Publishing requires the sanction that authorises the spend — a tender
+/// floated against nothing is how money gets committed before anyone agreed
+/// to it — so a tender names the approved governance request behind it.
+model Tender {
+  id                 String       @id @default(cuid())
+  refNo              String       @unique
+  title              String
+  description        String
+  department         String
+  category           String
+  estimatedValue     Int
+  status             TenderStatus @default(DRAFT)
+  publishedOn        DateTime?
+  submissionDeadline DateTime
+  openingDate        DateTime
+  /// Closed when the technical stage is decided; only then may financial
+  /// envelopes be opened.
+  technicalClosedAt  DateTime?
+  awardedBidId       String?      @unique
+  cancelReason       String?
+  createdAt          DateTime     @default(now())
+
+  collegeId   String
+  /// The approved PROCUREMENT request that sanctions it.
+  requestId   String?
+  createdById String
+
+  college   College            @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+  request   GovernanceRequest? @relation(fields: [requestId], references: [id])
+  createdBy Faculty            @relation("TenderRaisedBy", fields: [createdById], references: [id])
+
+  bids       TenderBid[]
+  corrigenda TenderCorrigendum[]
+  order      PurchaseOrder?
+
+  @@index([collegeId, status])
+  @@map("tenders")
+}
+
+/// A change to a published tender, which is a public act and dated as one.
+model TenderCorrigendum {
+  id          String    @id @default(cuid())
+  tenderId    String
+  description String
+  newDeadline DateTime?
+  issuedAt    DateTime  @default(now())
+
+  tender Tender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+
+  @@map("tender_corrigenda")
+}
+
+enum BidStatus {
+  SUBMITTED
+  TECHNICAL_QUALIFIED
+  TECHNICAL_REJECTED
+  FINANCIAL_OPENED
+  RECOMMENDED
+}
+
+/// One vendor's bid, in two envelopes.
+///
+/// The financial quote is stored from the moment it is lodged but is not
+/// disclosed by any read until the technical stage closes. That is the whole
+/// integrity of a two-envelope tender: whoever scores the technical bid must
+/// not know what it would cost.
+model TenderBid {
+  id                String    @id @default(cuid())
+  tenderId          String
+  vendorId          String
+  submittedAt       DateTime  @default(now())
+  technicalScore    Int?
+  technicalRemarks  String?
+  financialQuote    Int
+  financialOpenedAt DateTime?
+  status            BidStatus @default(SUBMITTED)
+
+  tender Tender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@unique([tenderId, vendorId])
+  @@index([tenderId, status])
+  @@map("tender_bids")
+}
+
+enum POStatus {
+  ISSUED
+  ACKNOWLEDGED
+  PARTIAL_DELIVERY
+  DELIVERED
+  INSPECTED
+  BILL_PASSED
+  PAID
+}
+
+/// The order that follows an award, and everything that happens to it after.
+///
+/// The stages run one way: nothing is inspected before it is delivered, no
+/// bill is passed before inspection, and nothing is paid before its bill.
+model PurchaseOrder {
+  id               String    @id @default(cuid())
+  poNo             String    @unique
+  tenderId         String    @unique
+  vendorId         String
+  totalAmount      Int
+  issueDate        DateTime  @default(now())
+  deliveryDeadline DateTime
+  status           POStatus  @default(ISSUED)
+  grnNo            String?
+  invoiceNo        String?
+  billPassedOn     DateTime?
+  paymentDate      DateTime?
+  paymentRef       String?
+
+  tender Tender   @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  vendor Vendor   @relation(fields: [vendorId], references: [id])
+  items  POItem[]
+
+  @@index([status])
+  @@map("purchase_orders")
+}
+
+model POItem {
+  id           String @id @default(cuid())
+  orderId      String
+  description  String
+  unit         String
+  quantity     Int
+  unitRate     Int
+  amount       Int
+  deliveredQty Int    @default(0)
+
+  order PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("po_items")
+}
+
+// ═══ Phase 8 — right to information ══════════════════════════════════════════
+
+enum RtiStatus {
+  RECEIVED
+  ASSIGNED
+  UNDER_PROCESS
+  REPLIED
+  REJECTED
+  TRANSFERRED
+  FIRST_APPEAL
+  CIC_APPEAL
+  CLOSED
+}
+
+/// An application under the Right to Information Act.
+///
+/// The thirty-day clock is statutory, so it is computed from the date of
+/// receipt on every read rather than stored — a status column saying "on time"
+/// would go stale the moment the date passed. When it lapses without a reply
+/// the Act treats that as a refusal, and an appeal lies against it.
+model RtiApplication {
+  id               String    @id @default(cuid())
+  applicationNo    String    @unique
+  applicantName    String
+  applicantAddress String?
+  applicantEmail   String?
+  subject          String
+  particulars      String
+  category         String
+  receivedOn       DateTime  @default(now())
+  /// A person below the poverty line pays no fee; everyone else pays ten rupees.
+  bplExempt        Boolean   @default(false)
+  feePaid          Boolean   @default(false)
+  status           RtiStatus @default(RECEIVED)
+
+  pioId      String?
+  assignedAt DateTime?
+
+  repliedOn     DateTime?
+  replyText     String?
+  pagesSupplied Int?
+  additionalFee Int?
+
+  rejectedOn       DateTime?
+  /// The clauses of Section 8 relied on. Refusing without one is not allowed.
+  rejectionGrounds String[]
+  rejectionReason  String?
+
+  transferredTo String?
+  transferredOn DateTime?
+
+  collegeId String
+
+  college College      @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+  pio     OfficeStaff? @relation("RtiPio", fields: [pioId], references: [id])
+  appeals RtiAppeal[]
+
+  @@index([collegeId, status])
+  @@index([receivedOn])
+  @@map("rti_applications")
+}
+
+enum AppealTier {
+  FIRST
+  CIC
+}
+
+enum AppealOutcome {
+  PENDING
+  UPHELD
+  ALLOWED
+  PARTIALLY_ALLOWED
+}
+
+/// An appeal against a decision, or against the absence of one.
+model RtiAppeal {
+  id            String        @id @default(cuid())
+  appealNo      String        @unique
+  applicationId String
+  tier          AppealTier
+  filedOn       DateTime      @default(now())
+  /// Filed because the statutory period lapsed with no reply at all.
+  deemedRefusal Boolean       @default(false)
+  grounds       String
+  outcome       AppealOutcome @default(PENDING)
+  decidedOn     DateTime?
+  decision      String?
+  decidedById   String?
+
+  application RtiApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  decidedBy   OfficeStaff?   @relation("AppealDecidedBy", fields: [decidedById], references: [id])
+
+  @@unique([applicationId, tier])
+  @@index([outcome])
+  @@map("rti_appeals")
+}
+
+// ═══ Phase 9 — the IT console ════════════════════════════════════════════════
+
+enum PermissionEffect {
+  ALLOW
+  DENY
+}
+
+/// One line of the permission matrix: what a role may do in a module.
+///
+/// A missing rule means allow, so the matrix is a place to *withhold* rather
+/// than a list that must be complete before anything works. The route guards
+/// consult this, so revoking a module here takes effect on the next request.
+model PermissionRule {
+  id        String           @id @default(cuid())
+  role      Role
+  module    String
+  action    String
+  effect    PermissionEffect @default(ALLOW)
+  note      String?
+  updatedAt DateTime         @updatedAt
+
+  @@unique([role, module, action])
+  @@index([role])
+  @@map("permission_rules")
+}
+
+enum AuditOutcome {
+  OK
+  WARN
+  DENIED
+}
+
+/// An append-only record of what was done, chained by hash.
+///
+/// Each entry carries the hash of the one before it, so altering or removing
+/// any entry breaks every hash after it and the chain can be walked to find
+/// where. Nothing here is written by hand: entries come from the modules as
+/// they act.
+model AuditEntry {
+  id         String       @id @default(cuid())
+  seq        Int          @unique @default(autoincrement())
+  occurredAt DateTime     @default(now())
+  actorId    String?
+  actorName  String
+  actorRole  String?
+  module     String
+  action     String
+  target     String
+  detail     String?
+  ip         String?
+  outcome    AuditOutcome @default(OK)
+  /// SHA-256 over this entry's own fields plus the previous entry's hash.
+  hash       String       @unique
+  prevHash   String
+
+  actor User? @relation("AuditActor", fields: [actorId], references: [id])
+
+  @@index([module, occurredAt])
+  @@index([actorId])
+  @@map("audit_entries")
+}
+
+// ═══ Phase 10 — the intelligence layer ═══════════════════════════════════════
+
+enum RiskBand {
+  LOW
+  MODERATE
+  HIGH
+  CRITICAL
+}
+
+/// A risk score taken at a moment in time.
+///
+/// Scores are computed live from the records on every read, so a snapshot is
+/// not the answer — it is the answer *as it stood*, kept so that a score today
+/// can be compared with one from before an intervention. Without that, nobody
+/// can tell whether anything helped.
+model RiskAssessment {
+  id         String   @id @default(cuid())
+  studentId  String
+  assessedAt DateTime @default(now())
+  score      Int
+  band       RiskBand
+  /// What the score was computed from, in plain words.
+  basis      String
+  /// How much record there was to go on. A score from three marked sessions
+  /// deserves less weight than one from forty, and hiding that would be
+  /// worse than not scoring at all.
+  dataPoints Int      @default(0)
+
+  student Student              @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  factors RiskFactorSnapshot[]
+
+  @@index([studentId, assessedAt])
+  @@index([band])
+  @@map("risk_assessments")
+}
+
+/// One contributing factor, kept with the assessment that used it.
+///
+/// A score nobody can argue with is a score nobody should trust, so each
+/// factor records what it measured, which way it pushed, and by how much.
+model RiskFactorSnapshot {
+  id           String @id @default(cuid())
+  assessmentId String
+  factor       String
+  value        String
+  /// Whether this pushed the score up or down.
+  direction    String
+  weight       Float
+  contribution Int
+
+  assessment RiskAssessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+
+  @@map("risk_factor_snapshots")
+}
+
+enum InterventionKind {
+  COUNSELLING
+  PARENT_CONTACT
+  REMEDIAL_CLASS
+  FEE_RELIEF
+  MEDICAL_REFERRAL
+  OTHER
+}
+
+enum InterventionOutcome {
+  OPEN
+  IMPROVED
+  NO_CHANGE
+  WORSENED
+  WITHDRAWN
+}
+
+/// Something a mentor actually did about a student the model flagged.
+///
+/// This is what turns a list of scores into a process: the score says who to
+/// look at, the intervention says what was done, and the next snapshot says
+/// whether it worked.
+model Intervention {
+  id           String              @id @default(cuid())
+  studentId    String
+  raisedById   String
+  kind         InterventionKind
+  note         String
+  dueOn        DateTime?
+  outcome      InterventionOutcome @default(OPEN)
+  outcomeNote  String?
+  raisedAt     DateTime            @default(now())
+  closedAt     DateTime?
+  /// The score when it was opened, so the change can be read off later.
+  scoreAtRaise Int?
+
+  student  Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  raisedBy Faculty @relation("InterventionRaisedBy", fields: [raisedById], references: [id])
+
+  @@index([studentId, raisedAt])
+  @@index([outcome])
+  @@map("interventions")
+}
