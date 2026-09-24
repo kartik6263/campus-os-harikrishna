@@ -43,7 +43,8 @@ function start(t: Tenant, databaseUrl: string, port: number) {
       DATABASE_URL: databaseUrl,
       JWT_ACCESS_SECRET: crypto.randomBytes(32).toString('hex'),
       JWT_REFRESH_SECRET: crypto.randomBytes(32).toString('hex'),
-      CORS_ORIGINS: `http://localhost:5173,${tenantOrigin(t.slug)}`,
+      // The web app and the mobile app's browser preview (native apps send no Origin).
+      CORS_ORIGINS: `http://localhost:5173,http://localhost:8081,${tenantOrigin(t.slug)}`,
       TURNSTILE_ORIGINS: 'http://localhost:5173',
       APP_URL: `http://localhost:5173/?tenant=${t.slug}`,
       SEED_DEMO: 'false',
