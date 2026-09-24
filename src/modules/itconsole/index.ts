@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
@@ -89,6 +90,185 @@ itRouter.get(
         [...new Set(rows.map((r) => r.role))].map((r) => [r, rows.filter((x) => x.role === r).length]),
       ),
       users: rows,
+    });
+  }),
+);
+
+// ─── GET /api/it/provisioning-options ─────────────────────────────────────────
+
+/** What the Create User form offers: the colleges and their programmes. */
+itRouter.get(
+  '/provisioning-options',
+  requirePermission('System Config', 'view'),
+  asyncHandler(async (_req, res) => {
+    const colleges = await prisma.college.findMany({
+      select: { id: true, code: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+    const programmes = await prisma.programme.findMany({
+      select: { id: true, code: true, name: true, collegeId: true, years: true },
+      orderBy: { name: 'asc' },
+    });
+    res.json({ colleges, programmes });
+  }),
+);
+
+// ─── POST /api/it/users ───────────────────────────────────────────────────────
+
+const PROVISION_ROLES = ['STUDENT', 'PARENT', 'FACULTY', 'PRINCIPAL', 'OFFICE', 'REGISTRAR', 'ADMIN'] as const;
+
+const provisionInput = z
+  .object({
+    role: z.enum(PROVISION_ROLES),
+    name: z.string().trim().min(2).max(120),
+    email: z.string().trim().email(),
+    /** Blank: a temporary password is generated and shown once. */
+    password: z.string().min(8).max(100).optional().or(z.literal('')),
+    collegeId: z.string().optional(),
+    // Student
+    enrolmentNo: z.string().trim().max(40).optional(),
+    programmeId: z.string().optional(),
+    semester: z.coerce.number().int().min(1).max(12).optional(),
+    dob: z.string().optional(),
+    // Staff
+    employeeId: z.string().trim().max(40).optional(),
+    designation: z.string().trim().max(80).optional(),
+    department: z.string().trim().max(80).optional(),
+    // Parent
+    wardEnrolmentNo: z.string().trim().max(40).optional(),
+  })
+  .superRefine((v, ctx) => {
+    const need = (field: keyof typeof v, label: string) => {
+      if (!v[field]) ctx.addIssue({ code: 'custom', path: [field], message: `${label} is required for this role` });
+    };
+    if (v.role === 'STUDENT') {
+      need('enrolmentNo', 'Enrolment number');
+      need('programmeId', 'Programme');
+      need('semester', 'Semester');
+      need('dob', 'Date of birth');
+    }
+    if (['FACULTY', 'PRINCIPAL', 'OFFICE', 'REGISTRAR'].includes(v.role)) {
+      need('employeeId', 'Employee ID');
+      need('designation', 'Designation');
+    }
+    if (v.role === 'FACULTY' || v.role === 'PRINCIPAL') need('department', 'Department');
+    if (v.role === 'PARENT') need('wardEnrolmentNo', 'Ward’s enrolment number');
+  });
+
+/**
+ * The IT Cell issues a user ID (their email) and password to a student,
+ * parent, faculty member or staff member, together with the record that role
+ * works from. The holder must change the password at first sign-in; what
+ * each role may do is set in Roles & Permissions.
+ */
+itRouter.post(
+  '/users',
+  requirePermission('System Config', 'edit'),
+  validate('body', provisionInput),
+  asyncHandler(async (req, res) => {
+    const v = req.body as z.infer<typeof provisionInput>;
+    const email = v.email.toLowerCase();
+
+    // Only an IT Cell administrator can make another one.
+    if (v.role === 'ADMIN' && req.auth!.role !== 'ADMIN') {
+      throw ApiError.forbidden('Only an IT Cell administrator can create IT Cell accounts');
+    }
+
+    if (await prisma.user.findUnique({ where: { email }, select: { id: true } })) {
+      throw ApiError.conflict('An account with that email already exists');
+    }
+
+    // A college is needed by every record that sits under one.
+    const needsCollege = v.role !== 'PARENT' && v.role !== 'ADMIN';
+    const collegeId = needsCollege
+      ? (v.collegeId ?? (await prisma.college.findFirst({ select: { id: true }, orderBy: { createdAt: 'asc' } }))?.id)
+      : undefined;
+    if (needsCollege && !collegeId) {
+      throw ApiError.badRequest('Add a college first — this role’s record belongs to one');
+    }
+
+    const ward = v.role === 'PARENT'
+      ? await prisma.student.findUnique({ where: { enrolmentNo: v.wardEnrolmentNo! }, select: { id: true, guardianId: true } })
+      : null;
+    if (v.role === 'PARENT' && !ward) throw ApiError.badRequest('No student has that enrolment number');
+
+    const generated = !v.password;
+    const password = v.password || `Welcome-${crypto.randomBytes(4).toString('hex')}`;
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    const user = await prisma.$transaction(async (tx) => {
+      const u = await tx.user.create({
+        data: { email, passwordHash, role: v.role, mustChangePassword: true },
+        select: { id: true, email: true, role: true },
+      });
+
+      if (v.role === 'STUDENT') {
+        const semester = v.semester!;
+        const year = Math.ceil(semester / 2);
+        const intake = new Date().getFullYear() - (year - 1);
+        await tx.student.create({
+          data: {
+            userId: u.id,
+            name: v.name,
+            enrolmentNo: v.enrolmentNo!,
+            rollNo: v.enrolmentNo!,
+            dob: new Date(v.dob!),
+            semester,
+            year,
+            batch: `${intake}–${String(intake + 3).slice(2)}`,
+            collegeId: collegeId!,
+            programmeId: v.programmeId!,
+          },
+        });
+      } else if (v.role === 'FACULTY' || v.role === 'PRINCIPAL') {
+        await tx.faculty.create({
+          data: {
+            userId: u.id,
+            name: v.name,
+            employeeId: v.employeeId!,
+            designation: v.designation!,
+            department: v.department!,
+            joinDate: new Date(),
+            collegeId: collegeId!,
+          },
+        });
+      } else if (v.role === 'OFFICE' || v.role === 'REGISTRAR') {
+        await tx.officeStaff.create({
+          data: {
+            userId: u.id,
+            name: v.name,
+            employeeId: v.employeeId!,
+            designation: v.designation!,
+            collegeId: collegeId!,
+          },
+        });
+      } else if (v.role === 'PARENT') {
+        await tx.student.update({ where: { id: ward!.id }, data: { guardianId: u.id } });
+      }
+      return u;
+    }).catch((err: unknown) => {
+      // A unique field — enrolment number, employee ID — already taken.
+      if ((err as { code?: string }).code === 'P2002') {
+        const target = String((err as { meta?: { target?: unknown } }).meta?.target ?? 'a field');
+        throw ApiError.conflict(`That ${target.includes('employee') ? 'employee ID' : target.includes('enrolment') || target.includes('roll') ? 'enrolment number' : 'value'} is already in use`);
+      }
+      throw err;
+    });
+
+    await recordFor(req, {
+      module: 'System Config',
+      action: 'create-user',
+      target: user.email,
+      detail: `${v.name} created as ${v.role}; must set a new password at first sign-in`,
+      outcome: 'OK',
+    });
+
+    res.status(201).json({
+      ...user,
+      name: v.name,
+      // Shown once to the IT Cell to hand over; never stored in the clear.
+      temporaryPassword: generated ? password : undefined,
+      mustChangePassword: true,
     });
   }),
 );
