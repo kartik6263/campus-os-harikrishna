@@ -27,6 +27,8 @@ export function createApp() {
   const app = express();
 
   app.disable('x-powered-by');
+  // Behind Render's proxy, so req.ip is the caller rather than the proxy.
+  if (env.isProd) app.set('trust proxy', 1);
   app.use(helmet());
   app.use(compression());
   app.use(express.json({ limit: '1mb' }));

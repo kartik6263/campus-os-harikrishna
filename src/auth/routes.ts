@@ -20,11 +20,18 @@ export const authRouter = Router();
 
 const REFRESH_COOKIE = 'campus_rt';
 
-const cookieOptions = {
+// In production the web app and the API sit on different sites (Vercel and
+// Render), and a Lax cookie is never sent on a cross-site fetch. None is the
+// only setting that reaches the API from there, and it requires Secure.
+const clearOptions = {
   httpOnly: true,
-  sameSite: 'lax' as const,
+  sameSite: env.isProd ? ('none' as const) : ('lax' as const),
   secure: env.isProd,
   path: '/api/auth',
+};
+
+const cookieOptions = {
+  ...clearOptions,
   maxAge: env.REFRESH_TOKEN_TTL_DAYS * 86_400_000,
 };
 
@@ -233,7 +240,7 @@ authRouter.post(
     const result = await rotateRefreshToken(supplied, req.headers['user-agent']);
 
     if (!result.ok) {
-      res.clearCookie(REFRESH_COOKIE, { path: cookieOptions.path });
+      res.clearCookie(REFRESH_COOKIE, clearOptions);
       throw ApiError.unauthorized(
         result.reason === 'revoked'
           ? 'This session was revoked. Sign in again.'
@@ -276,7 +283,7 @@ authRouter.post(
       (req.cookies?.[REFRESH_COOKIE] as string | undefined);
 
     if (supplied) await revokeToken(supplied);
-    res.clearCookie(REFRESH_COOKIE, { path: cookieOptions.path });
+    res.clearCookie(REFRESH_COOKIE, clearOptions);
     res.status(204).end();
   }),
 );
@@ -288,7 +295,7 @@ authRouter.post(
   requireAuth,
   asyncHandler(async (req, res) => {
     await revokeAllForUser(req.auth!.sub);
-    res.clearCookie(REFRESH_COOKIE, { path: cookieOptions.path });
+    res.clearCookie(REFRESH_COOKIE, clearOptions);
     res.status(204).end();
   }),
 );
