@@ -127,7 +127,7 @@ attendanceRouter.post(
   requireRole('FACULTY', 'ADMIN'),
   validate('params', z.object({ id: z.string().min(1) })),
   asyncHandler(async (req, res) => {
-    const token = `JU-ATT-${crypto.randomBytes(12).toString('base64url')}`;
+    const token = `ATT-${crypto.randomBytes(12).toString('base64url')}`;
     const qrExpiresAt = new Date(Date.now() + QR_TTL_SECONDS * 1000);
 
     const session = await prisma.classSession.update({

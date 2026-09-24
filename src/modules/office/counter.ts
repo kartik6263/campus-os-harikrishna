@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { institutionCode } from '../institution.js';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import { prisma } from '../../db.js';
@@ -192,7 +193,7 @@ counterRouter.post(
     const deferred = DEFERRED.has(body.mode);
 
     const year = new Date().getFullYear();
-    const prefix = `CNT/JU/${year}/`;
+    const prefix = `CNT/${await institutionCode()}/${year}/`;
     const existing = await prisma.counterReceipt.findMany({
       where: { receiptNo: { startsWith: prefix } },
       select: { receiptNo: true },

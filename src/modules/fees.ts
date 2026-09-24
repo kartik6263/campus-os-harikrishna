@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { institutionCode } from './institution.js';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import { prisma } from '../db.js';
@@ -87,7 +88,7 @@ feesRouter.post(
 
     const stamp = new Date();
     const txnId = `${mode}${stamp.getTime()}${crypto.randomInt(1000, 9999)}`;
-    const receiptNo = `RCT/JU/${stamp.getFullYear()}/${crypto.randomInt(100000, 999999)}`;
+    const receiptNo = `RCT/${await institutionCode()}/${stamp.getFullYear()}/${crypto.randomInt(100000, 999999)}`;
 
     // Settle the instalment, record the payment, and apply the amount across
     // outstanding fee heads in one transaction — a partial write here would

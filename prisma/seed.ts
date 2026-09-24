@@ -1,6 +1,6 @@
 /**
  * Seeds the same demo record both clients already display — Priya Sharma,
- * BCA V Sem, MVM College Gwalior — so the API is a drop-in replacement for
+ * BCA V Sem, Model College Demo City — so the API is a drop-in replacement for
  * the mock modules rather than a different dataset.
  *
  * Idempotent: re-running resets the demo rows without duplicating them.
@@ -9,6 +9,7 @@ import 'dotenv/config';
 import bcrypt from 'bcryptjs';
 import { PrismaClient, type Weekday } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
+import { DEFAULT_INSTITUTION } from '../src/modules/institution-defaults.js';
 
 const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }),
@@ -102,11 +103,20 @@ async function main() {
 
   // ── Institution ────────────────────────────────────────────────────────────
 
+  // The deployment's own profile. A real customer replaces this from
+  // IT Console → Institution; the demo keeps a neutral, fictional one.
+  const { id: _id, ...demoInstitution } = DEFAULT_INSTITUTION;
+  await prisma.institution.upsert({
+    where: { id: 'default' },
+    create: { id: 'default', ...demoInstitution },
+    update: demoInstitution,
+  });
+
   const college = await prisma.college.create({
     data: {
-      code: 'JU-AC-002',
-      name: 'Govt. Maharani Laxmi Bai M.V.M. College',
-      district: 'Gwalior',
+      code: 'RDU-AC-002',
+      name: 'Govt. Model College',
+      district: 'Demo City',
     },
   });
 
@@ -123,7 +133,7 @@ async function main() {
   // ── Users ──────────────────────────────────────────────────────────────────
 
   const studentUser = await prisma.user.create({
-    data: { email: 'priya.sharma.2021@mvmgwl.ac.in', passwordHash, role: 'STUDENT' },
+    data: { email: 'priya.sharma.2021@demo.resolion.edu', passwordHash, role: 'STUDENT' },
   });
 
   const parentUser = await prisma.user.create({
@@ -131,21 +141,21 @@ async function main() {
   });
 
   const facultyUser = await prisma.user.create({
-    data: { email: 'rk.mishra@mvmgwl.ac.in', passwordHash, role: 'FACULTY' },
+    data: { email: 'rk.mishra@demo.resolion.edu', passwordHash, role: 'FACULTY' },
   });
 
   // The head of department, who approves what the lecturer submits.
   const hodUser = await prisma.user.create({
-    data: { email: 'ml.gupta@mvmgwl.ac.in', passwordHash, role: 'FACULTY' },
+    data: { email: 'ml.gupta@demo.resolion.edu', passwordHash, role: 'FACULTY' },
   });
 
   await prisma.user.create({
-    data: { email: 'admin@jiwaji.ac.in', passwordHash, role: 'ADMIN' },
+    data: { email: 'admin@demo.resolion.edu', passwordHash, role: 'ADMIN' },
   });
 
   const student = await prisma.student.create({
     data: {
-      enrolmentNo: 'JU/2021/BCA/0342',
+      enrolmentNo: 'RDU/2021/BCA/0342',
       rollNo: 'MVM/BCA/2021/0342',
       name: 'Priya Sharma',
       nameHi: 'प्रिया शर्मा',
@@ -156,9 +166,9 @@ async function main() {
       year: 3,
       batch: '2021–24',
       mobile: '+91 94250 33127',
-      address: '23, Vinay Nagar, Thatipur, Gwalior — 474011',
+      address: '23, Sector 4, Demo City — 100011',
       apaarId: 'APAAR2021MP1042867',
-      abcId: 'ABC-2021-GWL-08423',
+      abcId: 'ABC-2021-DC-08423',
       abcCredits: 84,
       abcTarget: 120,
       digilockerLinked: true,
@@ -301,16 +311,16 @@ async function main() {
 
   await prisma.payment.createMany({
     data: [
-      { studentId: student.id, head: 'Semester V Fees (Part)', amount: 10800, mode: 'UPI', txnId: 'UPI2024071812345678', receiptNo: 'RCT/JU/2024/044521', status: 'SUCCESS', paidAt: d('2024-07-18'), instalmentId: inst1.id },
-      { studentId: student.id, head: 'Scholarship Adjustment', amount: -5200, mode: 'System', txnId: 'SCH/MP/OBC/2024/08/9912', receiptNo: 'ADJ/JU/2024/009123', status: 'SUCCESS', paidAt: d('2024-08-22') },
-      { studentId: student.id, head: 'Library Fine', amount: 40, mode: 'UPI', txnId: 'UPI2024090100987654', receiptNo: 'RCT/JU/2024/049001', status: 'SUCCESS', paidAt: d('2024-09-01'), instalmentId: inst2.id },
+      { studentId: student.id, head: 'Semester V Fees (Part)', amount: 10800, mode: 'UPI', txnId: 'UPI2024071812345678', receiptNo: 'RCT/RDU/2024/044521', status: 'SUCCESS', paidAt: d('2024-07-18'), instalmentId: inst1.id },
+      { studentId: student.id, head: 'Scholarship Adjustment', amount: -5200, mode: 'System', txnId: 'SCH/ST/OBC/2024/08/9912', receiptNo: 'ADJ/RDU/2024/009123', status: 'SUCCESS', paidAt: d('2024-08-22') },
+      { studentId: student.id, head: 'Library Fine', amount: 40, mode: 'UPI', txnId: 'UPI2024090100987654', receiptNo: 'RCT/RDU/2024/049001', status: 'SUCCESS', paidAt: d('2024-09-01'), instalmentId: inst2.id },
     ],
   });
 
   await prisma.scholarshipAward.create({
     data: {
       studentId: student.id,
-      name: 'MP Post Matric OBC Scholarship',
+      name: 'State Post Matric OBC Scholarship',
       amount: 5200,
       adjusted: true,
       adjustedAt: d('2024-08-12'),
@@ -392,18 +402,18 @@ async function main() {
   const route = await prisma.transportRoute.create({
     data: {
       routeNo: 'R-07',
-      name: 'Thatipur — MVM College',
+      name: 'Sector 4 — Model College',
       busNo: 'MP07-GC-4892',
       driver: 'Shri Ramesh Yadav',
       driverPhone: '+91 94066 21188',
       currentStop: 2,
       stops: {
         create: [
-          { name: 'Thatipur Crossing', time: '08:05 AM', order: 0 },
-          { name: 'Vinay Nagar', time: '08:12 AM', order: 1 },
+          { name: 'Sector 4 Crossing', time: '08:05 AM', order: 0 },
+          { name: 'Sector 4', time: '08:12 AM', order: 1 },
           { name: 'Gandhi Road', time: '08:20 AM', order: 2 },
           { name: 'Company Bagh', time: '08:28 AM', order: 3 },
-          { name: 'MVM College Gate', time: '08:40 AM', order: 4 },
+          { name: 'Model College Gate', time: '08:40 AM', order: 4 },
         ],
       },
     },
@@ -434,8 +444,8 @@ async function main() {
 
   const mishra = await prisma.faculty.create({
     data: {
-      employeeId: 'MVM/FAC/CS/0047',
-      teacherCode: 'EMP/JU/TC/0247',
+      employeeId: 'GMC/FAC/CS/0047',
+      teacherCode: 'EMP/RDU/TC/0247',
       name: 'Dr. Rajesh Kumar Mishra',
       nameHi: 'डॉ. राजेश कुमार मिश्रा',
       designation: 'Assistant Professor',
@@ -451,8 +461,8 @@ async function main() {
 
   const gupta = await prisma.faculty.create({
     data: {
-      employeeId: 'MVM/FAC/CS/0012',
-      teacherCode: 'EMP/JU/TC/0112',
+      employeeId: 'GMC/FAC/CS/0012',
+      teacherCode: 'EMP/RDU/TC/0112',
       name: 'Prof. M.L. Gupta',
       nameHi: 'प्रो. एम.एल. गुप्ता',
       designation: 'Professor & Head',
@@ -470,9 +480,9 @@ async function main() {
   // The other lecturers on the timetable exist as records so every slot and
   // enrolment resolves to a person rather than a loose string.
   const OTHER_STAFF = [
-    { name: 'Prof. Sunita Yadav', employeeId: 'MVM/FAC/CS/0021', designation: 'Associate Professor', email: 'sunita.yadav@mvmgwl.ac.in' },
-    { name: 'Dr. Anil Sharma', employeeId: 'MVM/FAC/CS/0033', designation: 'Assistant Professor', email: 'anil.sharma@mvmgwl.ac.in' },
-    { name: 'Ms. Kavita Jain', employeeId: 'MVM/FAC/CS/0058', designation: 'Guest Lecturer', email: 'kavita.jain@mvmgwl.ac.in' },
+    { name: 'Prof. Sunita Yadav', employeeId: 'GMC/FAC/CS/0021', designation: 'Associate Professor', email: 'sunita.yadav@demo.resolion.edu' },
+    { name: 'Dr. Anil Sharma', employeeId: 'GMC/FAC/CS/0033', designation: 'Assistant Professor', email: 'anil.sharma@demo.resolion.edu' },
+    { name: 'Ms. Kavita Jain', employeeId: 'GMC/FAC/CS/0058', designation: 'Guest Lecturer', email: 'kavita.jain@demo.resolion.edu' },
   ];
 
   const facultyByName = new Map<string, string>([
@@ -553,12 +563,12 @@ async function main() {
   for (const mate of CLASSMATES) {
     const slug = mate.name.toLowerCase().replace(/[^a-z]+/g, '.');
     const user = await prisma.user.create({
-      data: { email: `${slug}.2021@mvmgwl.ac.in`, passwordHash, role: 'STUDENT' },
+      data: { email: `${slug}.2021@demo.resolion.edu`, passwordHash, role: 'STUDENT' },
     });
 
     const record = await prisma.student.create({
       data: {
-        enrolmentNo: `JU/2021/BCA/${mate.roll}`,
+        enrolmentNo: `RDU/2021/BCA/${mate.roll}`,
         rollNo: `MVM/BCA/2021/${mate.roll}`,
         name: mate.name,
         nameHi: mate.nameHi,
@@ -770,7 +780,7 @@ async function main() {
   // ── Counter staff ──────────────────────────────────────────────────────────
 
   const clerkUser = await prisma.user.create({
-    data: { email: 'pushpa.sharma@mvmgwl.ac.in', passwordHash, role: 'OFFICE' },
+    data: { email: 'pushpa.sharma@demo.resolion.edu', passwordHash, role: 'OFFICE' },
   });
 
   const clerk = await prisma.officeStaff.create({
@@ -787,7 +797,7 @@ async function main() {
   });
 
   const registrarUser = await prisma.user.create({
-    data: { email: 'registrar@mvmgwl.ac.in', passwordHash, role: 'REGISTRAR' },
+    data: { email: 'registrar@demo.resolion.edu', passwordHash, role: 'REGISTRAR' },
   });
 
   await prisma.officeStaff.create({
@@ -883,9 +893,9 @@ async function main() {
   // Each receipt is backed by a real ledger row, the same way the API writes
   // them — a payment at the window is a payment on the student's own screen.
   const COUNTER = [
-    { no: 'CNT/JU/2024/001141', student: classmateIds.get('Arun Kumar')!, head: 'Examination Fee', amount: 1800, mode: 'UPI', instrument: 'UPI2024091800112233', at: '2024-09-18', status: 'COMPLETE' as const },
-    { no: 'CNT/JU/2024/001142', student: classmateIds.get('Pooja Sharma')!, head: 'Semester Fee (Late)', amount: 9500, mode: 'CASH', instrument: null, at: '2024-09-18', status: 'COMPLETE' as const },
-    { no: 'CNT/JU/2024/001143', student: classmateIds.get('Mohit Dubey')!, head: 'Examination Fee', amount: 1800, mode: 'CHEQUE', instrument: '004421', at: '2024-09-17', status: 'PENDING_CLEARANCE' as const },
+    { no: 'CNT/RDU/2024/001141', student: classmateIds.get('Arun Kumar')!, head: 'Examination Fee', amount: 1800, mode: 'UPI', instrument: 'UPI2024091800112233', at: '2024-09-18', status: 'COMPLETE' as const },
+    { no: 'CNT/RDU/2024/001142', student: classmateIds.get('Pooja Sharma')!, head: 'Semester Fee (Late)', amount: 9500, mode: 'CASH', instrument: null, at: '2024-09-18', status: 'COMPLETE' as const },
+    { no: 'CNT/RDU/2024/001143', student: classmateIds.get('Mohit Dubey')!, head: 'Examination Fee', amount: 1800, mode: 'CHEQUE', instrument: '004421', at: '2024-09-17', status: 'PENDING_CLEARANCE' as const },
   ];
 
   for (const c of COUNTER) {
@@ -985,14 +995,14 @@ async function main() {
   // ══ Phase 4 — the examination back-office ════════════════════════════════
 
   const CENTRES = [
-    { code: 'GWL-01', name: 'Govt. M.L.B. Girls College', city: 'Gwalior', district: 'Gwalior', capacity: 1200, pincode: '474001' },
-    { code: 'GWL-02', name: 'Govt. Madhav Science College', city: 'Gwalior', district: 'Gwalior', capacity: 1000, pincode: '474002' },
-    { code: 'GWL-03', name: 'Govt. Commerce College', city: 'Gwalior', district: 'Gwalior', capacity: 800, pincode: '474001' },
-    { code: 'GWL-04', name: 'Govt. MVM College', city: 'Gwalior', district: 'Gwalior', capacity: 900, pincode: '474011' },
-    { code: 'MRN-01', name: 'Govt. Degree College, Morena', city: 'Morena', district: 'Morena', capacity: 600, pincode: '476001' },
-    { code: 'BHD-01', name: 'Govt. Degree College, Bhind', city: 'Bhind', district: 'Bhind', capacity: 500, pincode: '477001' },
+    { code: 'DC-01', name: 'Govt. Girls College', city: 'Demo City', district: 'Demo City', capacity: 1200, pincode: '100001' },
+    { code: 'DC-02', name: 'Govt. Science College', city: 'Demo City', district: 'Demo City', capacity: 1000, pincode: '100002' },
+    { code: 'DC-03', name: 'Govt. Commerce College', city: 'Demo City', district: 'Demo City', capacity: 800, pincode: '100001' },
+    { code: 'DC-04', name: 'Govt. Model College', city: 'Demo City', district: 'Demo City', capacity: 900, pincode: '100011' },
+    { code: 'MRN-01', name: 'Govt. Degree College, Northfield', city: 'Northfield', district: 'Northfield', capacity: 600, pincode: '476001' },
+    { code: 'BHD-01', name: 'Govt. Degree College, Eastwood', city: 'Eastwood', district: 'Eastwood', capacity: 500, pincode: '477001' },
     // Deliberately tiny, so the allocation screen has a hall that fills up.
-    { code: 'DTA-01', name: 'Govt. Degree College, Datia', city: 'Datia', district: 'Datia', capacity: 8, pincode: '475661' },
+    { code: 'DTA-01', name: 'Govt. Degree College, Southgate', city: 'Southgate', district: 'Southgate', capacity: 8, pincode: '475661' },
   ];
 
   await prisma.examCentre.createMany({ data: CENTRES });
@@ -1001,7 +1011,7 @@ async function main() {
   // closed, which is the point at which centres are allocated.
   const examSession = await prisma.examSession.create({
     data: {
-      code: 'SES/JU/2024/ODD',
+      code: 'SES/RDU/2024/ODD',
       name: 'Nov–Dec 2024 (Odd Semester)',
       academicYear: '2024–25',
       status: 'FORM_WINDOW_CLOSED',
@@ -1038,7 +1048,7 @@ async function main() {
   // that did not come from Phase 1's hand-written results.
   await prisma.examSession.create({
     data: {
-      code: 'SES/JU/2024/EVEN',
+      code: 'SES/RDU/2024/EVEN',
       name: 'Apr–May 2024 (Even Semester)',
       academicYear: '2023–24',
       status: 'RESULT_PUBLISHED',
@@ -1056,13 +1066,13 @@ async function main() {
   // ══ Phase 5 — governance ═════════════════════════════════════════════════
 
   const principalUser = await prisma.user.create({
-    data: { email: 'principal@mvmgwl.ac.in', passwordHash, role: 'PRINCIPAL' },
+    data: { email: 'principal@demo.resolion.edu', passwordHash, role: 'PRINCIPAL' },
   });
 
   const principal = await prisma.faculty.create({
     data: {
-      employeeId: 'MVM/FAC/CS/0001',
-      teacherCode: 'EMP/JU/TC/0018',
+      employeeId: 'GMC/FAC/CS/0001',
+      teacherCode: 'EMP/RDU/TC/0018',
       name: 'Dr. Nirmala Verma',
       nameHi: 'डॉ. निर्मला वर्मा',
       designation: 'Principal',
@@ -1082,13 +1092,13 @@ async function main() {
   const COMPLIANCE = [
     { code: 'UGC-2F', category: 'Statutory', authority: 'UGC', requirement: 'Recognition under Section 2(f) of the UGC Act', status: 'COMPLIANT' as const, evidence: 'UGC letter F.8-42/2009(CPP-I) dated 14-08-2009', due: null },
     { code: 'UGC-12B', category: 'Statutory', authority: 'UGC', requirement: 'Eligibility under Section 12(B) for central assistance', status: 'COMPLIANT' as const, evidence: 'UGC 12(B) certificate dated 02-02-2011', due: null },
-    { code: 'JU-AFF-01', category: 'Affiliation', authority: 'Jiwaji University', requirement: 'Annual affiliation renewal for all running programmes', status: 'PARTIAL' as const, evidence: 'Application submitted; inspection pending', due: 45 },
-    { code: 'JU-AFF-02', category: 'Affiliation', authority: 'Jiwaji University', requirement: 'Sanctioned intake not exceeded in any programme', status: 'COMPLIANT' as const, evidence: 'Admission register, verified 17-09-2024', due: null },
+    { code: 'RDU-AFF-01', category: 'Affiliation', authority: 'Resolion Demo University', requirement: 'Annual affiliation renewal for all running programmes', status: 'PARTIAL' as const, evidence: 'Application submitted; inspection pending', due: 45 },
+    { code: 'RDU-AFF-02', category: 'Affiliation', authority: 'Resolion Demo University', requirement: 'Sanctioned intake not exceeded in any programme', status: 'COMPLIANT' as const, evidence: 'Admission register, verified 17-09-2024', due: null },
     { code: 'NAAC-SSR', category: 'Accreditation', authority: 'NAAC', requirement: 'Self Study Report submitted for the current cycle', status: 'PARTIAL' as const, evidence: 'Draft SSR circulated to IQAC', due: 30 },
     { code: 'NAAC-AQAR', category: 'Accreditation', authority: 'NAAC', requirement: 'Annual Quality Assurance Report filed for the preceding year', status: 'NON_COMPLIANT' as const, evidence: null, due: -12 },
     { code: 'FAC-RATIO', category: 'Faculty', authority: 'UGC', requirement: 'Student–teacher ratio within the prescribed norm', status: 'COMPLIANT' as const, evidence: 'Workload statement, current term', due: null },
     { code: 'FAC-QUAL', category: 'Faculty', authority: 'UGC', requirement: 'All teaching posts held by qualified staff (NET/SET/PhD)', status: 'PARTIAL' as const, evidence: 'Two guest lecturers pending NET', due: 90 },
-    { code: 'INF-LIB', category: 'Infrastructure', authority: 'Jiwaji University', requirement: 'Library holdings and reading space per the affiliation norms', status: 'COMPLIANT' as const, evidence: 'Library stock register, audited 30-06-2024', due: null },
+    { code: 'INF-LIB', category: 'Infrastructure', authority: 'Resolion Demo University', requirement: 'Library holdings and reading space per the affiliation norms', status: 'COMPLIANT' as const, evidence: 'Library stock register, audited 30-06-2024', due: null },
     { code: 'INF-LAB', category: 'Infrastructure', authority: 'AICTE', requirement: 'Computer laboratory ratio of one terminal per two students', status: 'NON_COMPLIANT' as const, evidence: null, due: 20 },
     { code: 'GOV-IQAC', category: 'Governance', authority: 'NAAC', requirement: 'IQAC constituted and meeting quarterly', status: 'COMPLIANT' as const, evidence: 'Minutes of four meetings, 2023–24', due: null },
     { code: 'GOV-GRIEV', category: 'Governance', authority: 'UGC', requirement: 'Grievance redressal and anti-ragging committees notified', status: 'COMPLIANT' as const, evidence: 'Notification dated 01-07-2024', due: null },
@@ -1269,14 +1279,14 @@ async function main() {
   const VENDORS = [
     { code: 'VND/001', name: 'Technocraft IT Solutions Pvt. Ltd.', gstin: '23AABCT1234D1ZQ', pan: 'AABCT1234D', cats: ['IT Equipment', 'Software'], contact: 'Ajay Trivedi', mobile: '98264 78901', email: 'ajay@technocraft.in', status: 'EMPANELLED' as const, verified: true, upto: 400 },
     { code: 'VND/002', name: 'Shree Stationers & Publishers', gstin: '23AAQPS5678E1ZR', pan: 'AAQPS5678E', cats: ['Stationery', 'Printing'], contact: 'Pradeep Sharma', mobile: '94250 34512', email: 'pradeep@shreestationer.co.in', status: 'EMPANELLED' as const, verified: true, upto: 180 },
-    { code: 'VND/003', name: 'Gwalior Scientific Instruments', gstin: '23AAVGS9012F1ZS', pan: 'AAVGS9012F', cats: ['Lab Equipment', 'IT Equipment'], contact: 'Suresh Gupta', mobile: '70491 22334', email: 'suresh@gsi.co.in', status: 'EMPANELLED' as const, verified: true, upto: 400 },
-    { code: 'VND/004', name: 'Madhya Pradesh Construction Co.', gstin: '23AAAPM3456G1ZT', pan: 'AAAPM3456G', cats: ['Civil Works'], contact: 'Vinod Kumar', mobile: '88175 67890', email: 'mpcc.gwl@gmail.com', status: 'EMPANELLED' as const, verified: true, upto: 180 },
+    { code: 'VND/003', name: 'Demo Scientific Instruments', gstin: '23AAVGS9012F1ZS', pan: 'AAVGS9012F', cats: ['Lab Equipment', 'IT Equipment'], contact: 'Suresh Gupta', mobile: '70491 22334', email: 'suresh@gsi.co.in', status: 'EMPANELLED' as const, verified: true, upto: 400 },
+    { code: 'VND/004', name: 'State Construction Co.', gstin: '23AAAPM3456G1ZT', pan: 'AAAPM3456G', cats: ['Civil Works'], contact: 'Vinod Kumar', mobile: '88175 67890', email: 'statecc.demo@gmail.com', status: 'EMPANELLED' as const, verified: true, upto: 180 },
     // Papers not yet checked, so not yet allowed to bid.
     { code: 'VND/005', name: 'Sunrise Furniture Works', gstin: '23AABSF7890H1ZU', pan: 'AABSF7890H', cats: ['Furniture'], contact: 'Ram Kishore', mobile: '97551 89012', email: 'sunrise.furniture@gmail.com', status: 'PENDING' as const, verified: false, upto: null },
     // Struck off, and the register says why.
-    { code: 'VND/006', name: 'Apex Traders', gstin: '23AACAT2345J1ZV', pan: 'AACAT2345J', cats: ['IT Equipment'], contact: 'Mohan Lal', mobile: '99812 45670', email: 'apex.traders@gmail.com', status: 'BLACKLISTED' as const, verified: true, upto: null, reason: 'Supplied goods below specification on PO/JU/2023/0042; recovery pending.' },
+    { code: 'VND/006', name: 'Apex Traders', gstin: '23AACAT2345J1ZV', pan: 'AACAT2345J', cats: ['IT Equipment'], contact: 'Mohan Lal', mobile: '99812 45670', email: 'apex.traders@gmail.com', status: 'BLACKLISTED' as const, verified: true, upto: null, reason: 'Supplied goods below specification on PO/RDU/2023/0042; recovery pending.' },
     // Empanelment lapsed, which is as good as none.
-    { code: 'VND/007', name: 'Chambal Electricals', gstin: '23AADCE6789K1ZW', pan: 'AADCE6789K', cats: ['Electrical'], contact: 'Kailash Rathore', mobile: '93005 11223', email: 'chambal.elec@gmail.com', status: 'EMPANELLED' as const, verified: true, upto: -30 },
+    { code: 'VND/007', name: 'River Electricals', gstin: '23AADCE6789K1ZW', pan: 'AADCE6789K', cats: ['Electrical'], contact: 'Kailash Rathore', mobile: '93005 11223', email: 'river.elec@gmail.com', status: 'EMPANELLED' as const, verified: true, upto: -30 },
   ];
 
   const vendorByCode = new Map<string, string>();
@@ -1310,7 +1320,7 @@ async function main() {
 
   const tender = await prisma.tender.create({
     data: {
-      refNo: 'JU/PROC/2024/001',
+      refNo: 'RDU/PROC/2024/001',
       title: 'Supply and installation of 20 computer terminals',
       description:
         'Supply, delivery and installation of twenty desktop terminals for the computer laboratory, ' +
@@ -1350,7 +1360,7 @@ async function main() {
   // A second tender, already awarded, with its order part-way through.
   const furnitureTender = await prisma.tender.create({
     data: {
-      refNo: 'JU/PROC/2024/002',
+      refNo: 'RDU/PROC/2024/002',
       title: 'Supply of reading room furniture',
       description: 'Forty reading tables and one hundred and sixty chairs for the library reading room.',
       department: 'Library',
@@ -1385,7 +1395,7 @@ async function main() {
 
   await prisma.purchaseOrder.create({
     data: {
-      poNo: 'PO/JU/2024/0001',
+      poNo: 'PO/RDU/2024/0001',
       tenderId: furnitureTender.id,
       vendorId: vendorByCode.get('VND/002')!,
       totalAmount: 441000,
@@ -1431,8 +1441,8 @@ async function main() {
     },
     {
       no: 'RTI/2024/0876', name: 'Ms. Anjali Rawat',
-      subject: 'Affiliation status of Vivekananda College, Bhind',
-      particulars: 'The current affiliation status of Vivekananda College, Bhind, and copies of the last two inspection reports.',
+      subject: 'Affiliation status of Vivekananda College, Eastwood',
+      particulars: 'The current affiliation status of Vivekananda College, Eastwood, and copies of the last two inspection reports.',
       category: 'Affiliation', received: 34, bpl: false, fee: true,
       status: 'REPLIED' as const, pio: true, repliedDaysAgo: 6, pages: 14,
     },
@@ -1443,7 +1453,7 @@ async function main() {
       data: {
         applicationNo: r.no,
         applicantName: r.name,
-        applicantAddress: r.name === 'Anonymous' ? null : 'Gwalior, Madhya Pradesh',
+        applicantAddress: r.name === 'Anonymous' ? null : 'Demo City',
         subject: r.subject,
         particulars: r.particulars,
         category: r.category,
@@ -1455,7 +1465,7 @@ async function main() {
         assignedAt: r.pio ? daysAgo(r.received - 1) : null,
         repliedOn: r.repliedDaysAgo ? daysAgo(r.repliedDaysAgo) : null,
         replyText: r.repliedDaysAgo
-          ? 'The college is affiliated to Jiwaji University for the programmes listed in the enclosed order. Copies of the last two inspection reports are supplied.'
+          ? 'The college is affiliated to Resolion Demo University for the programmes listed in the enclosed order. Copies of the last two inspection reports are supplied.'
           : null,
         pagesSupplied: r.pages ?? null,
         additionalFee: r.pages ? r.pages * 2 : null,
@@ -1485,7 +1495,7 @@ async function main() {
     // Deliberately a lecturer the smoke suite never signs in as: locking an
     // account the tests authenticate with would break them, which is exactly
     // the point of the lock working.
-    where: { email: 'sunita.yadav@mvmgwl.ac.in' },
+    where: { email: 'sunita.yadav@demo.resolion.edu' },
     data: {
       lockedAt: daysAgo(2),
       lockReason: 'Five failed sign-in attempts from an unrecognised address.',
@@ -1635,7 +1645,7 @@ async function main() {
       endTime: '10:00',
       room: 'CS-201',
       faculty: 'Dr. R.K. Mishra',
-      qrToken: 'JU-ATT-DEMO-BCA501',
+      qrToken: 'RDU-ATT-DEMO-BCA501',
       // Long-lived on purpose: a 30-second demo token would always be dead.
       qrExpiresAt: new Date(Date.now() + 365 * 86_400_000),
     },
@@ -1658,7 +1668,7 @@ Seed complete.
   principal ${principalUser.email}
   office   ${clerkUser.email}
   registrar ${registrarUser.email}
-  admin    admin@jiwaji.ac.in
+  admin    admin@demo.resolion.edu
 
   Demo QR token: ${todaySession.qrToken}
 `);

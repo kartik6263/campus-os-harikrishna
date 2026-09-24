@@ -22,6 +22,7 @@ import { rtiRouter } from './modules/rti/index.js';
 import { itRouter } from './modules/itconsole/index.js';
 import { intelligenceRouter } from './modules/intelligence/index.js';
 import { studentRevaluationRouter } from './modules/exam/results.js';
+import { institutionRouter } from './modules/institution.js';
 
 export function createApp() {
   const app = express();
@@ -52,6 +53,7 @@ export function createApp() {
   });
 
   app.use('/api/auth', authRouter);
+  app.use('/api/institution', institutionRouter);
   app.use('/api/student/fees', feesRouter);
   app.use('/api/student', studentRouter);
   app.use('/api/attendance', attendanceRouter);

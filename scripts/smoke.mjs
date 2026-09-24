@@ -61,7 +61,7 @@ section('Authentication');
 
 const login = await call('/api/auth/login', {
   method: 'POST',
-  body: { email: 'priya.sharma.2021@mvmgwl.ac.in', password: 'campus123' },
+  body: { email: 'priya.sharma.2021@demo.resolion.edu', password: 'campus123' },
 });
 check('login with correct credentials', login.status === 200 && !!login.body?.accessToken, `status ${login.status}`);
 check('login returns the student record', login.body?.user?.student?.name === 'Priya Sharma');
@@ -72,7 +72,7 @@ const refreshToken = login.body?.refreshToken;
 
 check(
   'wrong password is rejected',
-  (await call('/api/auth/login', { method: 'POST', body: { email: 'priya.sharma.2021@mvmgwl.ac.in', password: 'nope' } })).status === 401,
+  (await call('/api/auth/login', { method: 'POST', body: { email: 'priya.sharma.2021@demo.resolion.edu', password: 'nope' } })).status === 401,
 );
 check(
   'unknown email is rejected',
@@ -84,7 +84,7 @@ check('protected route with a junk token is 401', (await call('/api/student/prof
 
 {
   const me = await call('/api/auth/me', { token });
-  check('GET /api/auth/me returns the caller', me.status === 200 && me.body?.email === 'priya.sharma.2021@mvmgwl.ac.in');
+  check('GET /api/auth/me returns the caller', me.status === 200 && me.body?.email === 'priya.sharma.2021@demo.resolion.edu');
 }
 
 // ── Student domain ───────────────────────────────────────────────────────────
@@ -95,7 +95,7 @@ section('Student profile');
   check('profile returns 200', r.status === 200, `status ${r.status}`);
   check('profile has the right roll number', r.body?.rollNo === 'MVM/BCA/2021/0342');
   check('Hindi name survived the round trip', r.body?.nameHi === 'प्रिया शर्मा', `got ${JSON.stringify(r.body?.nameHi)}`);
-  check('college is joined in', r.body?.college?.code === 'JU-AC-002');
+  check('college is joined in', r.body?.college?.code === 'RDU-AC-002');
 }
 
 section('Attendance');
@@ -162,7 +162,7 @@ section('Transport');
 {
   const r = await call('/api/student/transport', { token });
   check('route R-07 returned', r.body?.routeNo === 'R-07');
-  check('five stops in order', r.body?.stops?.length === 5 && r.body?.stops?.[0]?.name === 'Thatipur Crossing');
+  check('five stops in order', r.body?.stops?.length === 5 && r.body?.stops?.[0]?.name === 'Sector 4 Crossing');
   check('bus pass is valid', r.body?.passValid === true);
 }
 
@@ -212,14 +212,14 @@ section('QR attendance');
 
   check(
     'a bogus token is rejected',
-    (await call('/api/attendance/mark', { method: 'POST', token, body: { token: 'JU-ATT-NOT-REAL' } })).status === 400,
+    (await call('/api/attendance/mark', { method: 'POST', token, body: { token: 'RDU-ATT-NOT-REAL' } })).status === 400,
   );
 
-  const mark = await call('/api/attendance/mark', { method: 'POST', token, body: { token: 'JU-ATT-DEMO-BCA501' } });
+  const mark = await call('/api/attendance/mark', { method: 'POST', token, body: { token: 'RDU-ATT-DEMO-BCA501' } });
   check('marking with the real token succeeds', mark.status === 201, `status ${mark.status} ${mark.raw?.slice(0, 120)}`);
   check('response names the subject', mark.body?.subject === 'Software Engineering');
 
-  const again = await call('/api/attendance/mark', { method: 'POST', token, body: { token: 'JU-ATT-DEMO-BCA501' } });
+  const again = await call('/api/attendance/mark', { method: 'POST', token, body: { token: 'RDU-ATT-DEMO-BCA501' } });
   check('marking twice is a 409', again.status === 409, `status ${again.status}`);
 
   const after = await call('/api/student/attendance', { token });
@@ -240,7 +240,7 @@ section('Payment');
 {
   const pay = await call('/api/student/fees/pay', { method: 'POST', token, body: { instalmentId, mode: 'UPI' } });
   check('paying the outstanding instalment succeeds', pay.status === 201, `status ${pay.status} ${pay.raw?.slice(0, 160)}`);
-  check('a receipt number is issued', typeof pay.body?.receipt === 'string' && pay.body.receipt.startsWith('RCT/JU/'));
+  check('a receipt number is issued', typeof pay.body?.receipt === 'string' && pay.body.receipt.startsWith('RCT/RDU/'));
 
   const after = await call('/api/student/fees', { token });
   check('dues are now zero', after.body?.summary?.due === 0, `got ${after.body?.summary?.due}`);
@@ -284,7 +284,7 @@ section('Authorisation');
 
   const faculty = await call('/api/auth/login', {
     method: 'POST',
-    body: { email: 'rk.mishra@mvmgwl.ac.in', password: 'campus123' },
+    body: { email: 'rk.mishra@demo.resolion.edu', password: 'campus123' },
   });
   check(
     'student cannot rotate a QR code (faculty only)',
@@ -318,23 +318,23 @@ section('Faculty — identity and teaching load');
 
 const facultyLogin = await call('/api/auth/login', {
   method: 'POST',
-  body: { email: 'rk.mishra@mvmgwl.ac.in', password: 'campus123' },
+  body: { email: 'rk.mishra@demo.resolion.edu', password: 'campus123' },
 });
 const facToken = facultyLogin.body?.accessToken;
 
 const hodLogin = await call('/api/auth/login', {
   method: 'POST',
-  body: { email: 'ml.gupta@mvmgwl.ac.in', password: 'campus123' },
+  body: { email: 'ml.gupta@demo.resolion.edu', password: 'campus123' },
 });
 const hodToken = hodLogin.body?.accessToken;
 
 const otherLogin = await call('/api/auth/login', {
   method: 'POST',
-  body: { email: 'anil.sharma@mvmgwl.ac.in', password: 'campus123' },
+  body: { email: 'anil.sharma@demo.resolion.edu', password: 'campus123' },
 });
 const otherToken = otherLogin.body?.accessToken;
 
-check('faculty login carries the faculty record', facultyLogin.body?.user?.faculty?.employeeId === 'MVM/FAC/CS/0047');
+check('faculty login carries the faculty record', facultyLogin.body?.user?.faculty?.employeeId === 'GMC/FAC/CS/0047');
 check('the head of department is flagged as one', hodLogin.body?.user?.faculty?.isHod === true);
 check('an ordinary lecturer is not', facultyLogin.body?.user?.faculty?.isHod === false);
 
@@ -655,7 +655,7 @@ let correctionId = null;
   // The number the approval has to move.
   const rahulLogin = await call('/api/auth/login', {
     method: 'POST',
-    body: { email: 'rahul.verma.2021@mvmgwl.ac.in', password: 'campus123' },
+    body: { email: 'rahul.verma.2021@demo.resolion.edu', password: 'campus123' },
   });
   const rahulToken = rahulLogin.body?.accessToken;
   const before = await call('/api/student/attendance', { token: rahulToken });
@@ -939,7 +939,7 @@ section('Faculty leave');
   const applied = await call('/api/faculty/leaves', {
     method: 'POST',
     token: facToken,
-    body: { kind: 'DUTY', from: '2026-10-10', to: '2026-10-12', reason: 'University examination duty at Jiwaji campus.' },
+    body: { kind: 'DUTY', from: '2026-10-10', to: '2026-10-12', reason: 'University examination duty at the university campus.' },
   });
   check('leave can be applied for', applied.status === 201, `status ${applied.status}`);
   check('the span is inclusive', applied.body?.days === 3, `got ${applied.body?.days}`);
@@ -1035,7 +1035,7 @@ section('Office — access');
 
 const officeLogin = await call('/api/auth/login', {
   method: 'POST',
-  body: { email: 'pushpa.sharma@mvmgwl.ac.in', password: 'campus123' },
+  body: { email: 'pushpa.sharma@demo.resolion.edu', password: 'campus123' },
 });
 const officeToken = officeLogin.body?.accessToken;
 
@@ -1104,7 +1104,7 @@ let shivaniId = null;
 
   const enrolled = await call(`/api/office/admissions/${shivaniId}/enrol`, { method: 'POST', token: officeToken });
   check('a verified candidate enrols', enrolled.status === 201, `status ${enrolled.status}`);
-  check('with an enrolment number', /^JU\/\d{4}\/BCA\/\d{4}$/.test(enrolled.body?.enrolmentNo ?? ''), enrolled.body?.enrolmentNo);
+  check('with an enrolment number', /^[A-Z]{1,6}\/\d{4}\/BCA\/\d{4}$/.test(enrolled.body?.enrolmentNo ?? ''), enrolled.body?.enrolmentNo);
   check('and first-semester subjects', enrolled.body?.subjectsEnrolled > 0, `got ${enrolled.body?.subjectsEnrolled}`);
 
   check(
@@ -1130,7 +1130,7 @@ section('Office — the fee counter');
   // account, and a counter test needs someone who still owes something.
   const hisLogin = await call('/api/auth/login', {
     method: 'POST',
-    body: { email: 'vikram.tiwari.2021@mvmgwl.ac.in', password: 'campus123' },
+    body: { email: 'vikram.tiwari.2021@demo.resolion.edu', password: 'campus123' },
   });
   const hisToken = hisLogin.body?.accessToken;
 
@@ -1170,7 +1170,7 @@ section('Office — the fee counter');
     body: { studentId: lookup.body?.id, head: 'Examination Fee', amount: 1800, mode: 'CASH' },
   });
   check('cash is taken', cash.status === 201, `status ${cash.status}`);
-  check('a receipt number is issued', /^CNT\/JU\/\d{4}\/\d{6}$/.test(cash.body?.receiptNo ?? ''), cash.body?.receiptNo);
+  check('a receipt number is issued', /^CNT\/[A-Z]{1,6}\/\d{4}\/\d{6}$/.test(cash.body?.receiptNo ?? ''), cash.body?.receiptNo);
   check('and it is applied against a head', cash.body?.appliedTo?.length > 0);
 
   // The whole point of Phase 3: one ledger, not two.
@@ -1391,7 +1391,7 @@ section('Examination — the sitting');
 
 const examLogin = await call('/api/auth/login', {
   method: 'POST',
-  body: { email: 'registrar@mvmgwl.ac.in', password: 'campus123' },
+  body: { email: 'registrar@demo.resolion.edu', password: 'campus123' },
 });
 const examToken = examLogin.body?.accessToken;
 
@@ -1407,7 +1407,7 @@ let bca501Paper = null;
   check('sessions list', r.status === 200, `status ${r.status}`);
   check('two sittings on record', r.body?.length === 2, `got ${r.body?.length}`);
 
-  const odd = r.body?.find((s) => s.code === 'SES/JU/2024/ODD');
+  const odd = r.body?.find((s) => s.code === 'SES/RDU/2024/ODD');
   examSessionId = odd?.id;
   check('the live sitting has its form window closed', odd?.status === 'FORM_WINDOW_CLOSED');
   check('and six papers scheduled', odd?.papers === 6, `got ${odd?.papers}`);
@@ -1448,7 +1448,7 @@ section('Examination — seating');
   }
   check('the college office cleared the class', cleared === 13, `got ${cleared}`);
 
-  // Datia holds eight; the class is thirteen.
+  // Southgate holds eight; the class is thirteen.
   const tiny = await call(`/api/exam/sessions/${examSessionId}/allocate`, {
     method: 'POST', token: examToken, body: { centreCode: 'DTA-01' },
   });
@@ -1465,7 +1465,7 @@ section('Examination — seating');
   );
 
   const main = await call(`/api/exam/sessions/${examSessionId}/allocate`, {
-    method: 'POST', token: examToken, body: { centreCode: 'GWL-04' },
+    method: 'POST', token: examToken, body: { centreCode: 'DC-04' },
   });
   check('the rest are seated elsewhere', main.body?.seated === 5, `seated ${main.body?.seated}`);
   check('with nobody left over', main.body?.unseated === 0);
@@ -1507,7 +1507,7 @@ let bundleOne = null;
 
   const b1 = await call(`/api/exam/papers/${bca501Paper?.id}/bundles`, {
     method: 'POST', token: examToken,
-    body: { centreCode: 'GWL-04', examinerName: 'Dr. S.K. Pandey', examinerRole: 'E1' },
+    body: { centreCode: 'DC-04', examinerName: 'Dr. S.K. Pandey', examinerRole: 'E1' },
   });
   check('a bundle is made up from the seating list', b1.status === 201, `status ${b1.status}`);
   check('with the candidates seated there', b1.body?.scripts === 5, `got ${b1.body?.scripts}`);
@@ -1558,7 +1558,7 @@ let bundleOne = null;
   // A second examiner who agrees on three and differs wildly on two.
   const b2 = await call(`/api/exam/papers/${bca501Paper?.id}/bundles`, {
     method: 'POST', token: examToken,
-    body: { centreCode: 'GWL-04', examinerName: 'Dr. A.K. Jain', examinerRole: 'E2' },
+    body: { centreCode: 'DC-04', examinerName: 'Dr. A.K. Jain', examinerRole: 'E2' },
   });
   const e2 = await call(`/api/exam/bundles/${b2.body?.id}/marks`, {
     method: 'POST', token: examToken,
@@ -1607,7 +1607,7 @@ section('Examination — results');
   // Every remaining paper, at both centres, so no script is unsettled.
   const detail = await call(`/api/exam/sessions/${examSessionId}`, { token: examToken });
   for (const p of detail.body.papers) {
-    for (const centreCode of ['GWL-04', 'DTA-01']) {
+    for (const centreCode of ['DC-04', 'DTA-01']) {
       const b = await call(`/api/exam/papers/${p.id}/bundles`, {
         method: 'POST', token: examToken,
         body: { centreCode, examinerName: 'Dr. Examiner', examinerRole: 'E1' },
@@ -1741,7 +1741,7 @@ section('Governance — access and the dashboard');
 
 const principalLogin = await call('/api/auth/login', {
   method: 'POST',
-  body: { email: 'principal@mvmgwl.ac.in', password: 'campus123' },
+  body: { email: 'principal@demo.resolion.edu', password: 'campus123' },
 });
 const principalToken = principalLogin.body?.accessToken;
 
@@ -1752,7 +1752,7 @@ check('nor an ordinary lecturer', (await call('/api/governance/dashboard', { tok
 {
   const r = await call('/api/governance/dashboard', { token: principalToken });
   check('the dashboard returns 200', r.status === 200, `status ${r.status}`);
-  check('it names the college', r.body?.college?.code === 'JU-AC-002');
+  check('it names the college', r.body?.college?.code === 'RDU-AC-002');
   check('and counts the roll', r.body?.totalStudents === 14, `got ${r.body?.totalStudents}`);
   check('the faculty', r.body?.totalFaculty === 6, `got ${r.body?.totalFaculty}`);
 
@@ -2288,7 +2288,7 @@ let openedBids = null;
 {
   // The seeded lab tender is already closed, so evaluation can run on it.
   const listed = await call('/api/procurement/tenders', { token: principalToken });
-  const lab = listed.body?.tenders?.find((t) => t.refNo === 'JU/PROC/2024/001');
+  const lab = listed.body?.tenders?.find((t) => t.refNo === 'RDU/PROC/2024/001');
   check('the closed tender is past its deadline', lab?.closed === true);
   check('with its quotes still sealed', lab?.financialsDisclosed === false);
 
@@ -2340,7 +2340,7 @@ let openedBids = null;
     body: { bidId: l1?.id, deliveryDeadline: deadline, items },
   });
   check('awarding L1 needs none', awarded.status === 201, `status ${awarded.status}`);
-  check('and raises the purchase order', /^PO\/JU\/\d{4}\/\d{4}$/.test(awarded.body?.purchaseOrder?.poNo ?? ''), awarded.body?.purchaseOrder?.poNo);
+  check('and raises the purchase order', /^PO\/[A-Z]{1,6}\/\d{4}\/\d{4}$/.test(awarded.body?.purchaseOrder?.poNo ?? ''), awarded.body?.purchaseOrder?.poNo);
   check('for the value of the lines', awarded.body?.purchaseOrder?.totalAmount === 798500, `got ${awarded.body?.purchaseOrder?.totalAmount}`);
 
   check(
@@ -2361,7 +2361,7 @@ section('Procurement — the purchase order');
   check('orders list returns 200', r.status === 200, `status ${r.status}`);
   check('two orders are open', r.body?.orders?.length === 2, `got ${r.body?.orders?.length}`);
 
-  const furniture = r.body?.orders?.find((o) => o.poNo === 'PO/JU/2024/0001');
+  const furniture = r.body?.orders?.find((o) => o.poNo === 'PO/RDU/2024/0001');
   check('a part-delivered order shows what is outstanding', furniture?.delivered === false);
   check('and knows where it can go next', furniture?.nextStages?.includes('DELIVERED'));
 
@@ -2438,7 +2438,7 @@ section('RTI — the register and the statutory clock');
 const rtiToken = (
   await call('/api/auth/login', {
     method: 'POST',
-    body: { email: 'registrar@mvmgwl.ac.in', password: 'campus123' },
+    body: { email: 'registrar@demo.resolion.edu', password: 'campus123' },
   })
 ).body?.accessToken;
 
@@ -2634,13 +2634,13 @@ section('RTI — registering and transferring');
   // Section 6(3) allows five days to pass it on; the seeded live application
   // is well past that.
   const lateTransfer = await call(`/api/rti/applications/${rtiLiveId}/transfer`, {
-    method: 'POST', token: rtiToken, body: { authority: 'Directorate of Higher Education, Bhopal' },
+    method: 'POST', token: rtiToken, body: { authority: 'Directorate of Higher Education, Lakeside' },
   });
   check('a transfer after five days is refused', lateTransfer.status === 400, `status ${lateTransfer.status}`);
 
   const inTime = await call(`/api/rti/applications/${registered.body?.id}/transfer`, {
     method: 'POST', token: rtiToken,
-    body: { authority: 'Directorate of Higher Education, Bhopal', reason: 'The information is held by the Directorate.' },
+    body: { authority: 'Directorate of Higher Education, Lakeside', reason: 'The information is held by the Directorate.' },
   });
   check('one inside the window goes through', inTime.status === 200, `status ${inTime.status}`);
   check('and names where it went', inTime.body?.transferredTo?.includes('Directorate'));
@@ -2686,7 +2686,7 @@ section('RTI — registering and transferring');
 section('IT console — accounts');
 
 const adminToken = (
-  await call('/api/auth/login', { method: 'POST', body: { email: 'admin@jiwaji.ac.in', password: 'campus123' } })
+  await call('/api/auth/login', { method: 'POST', body: { email: 'admin@demo.resolion.edu', password: 'campus123' } })
 ).body?.accessToken;
 
 check('a student cannot reach the console', (await call('/api/it/users', { token })).status === 403);
@@ -2697,7 +2697,7 @@ let itTargetId = null;
 {
   // A lock is not cosmetic: the sign-in path checks it.
   const blocked = await call('/api/auth/login', {
-    method: 'POST', body: { email: 'sunita.yadav@mvmgwl.ac.in', password: 'campus123' },
+    method: 'POST', body: { email: 'sunita.yadav@demo.resolion.edu', password: 'campus123' },
   });
   check('a locked account cannot sign in', blocked.status === 403, `status ${blocked.status}`);
   check('and is told why', blocked.body?.error?.message?.includes('locked'));
@@ -2713,11 +2713,11 @@ let itTargetId = null;
   check('and the failed attempts that led to it', locked?.failedAttempts === 5, `got ${locked?.failedAttempts}`);
 
   // Accounts carry the name from whichever record holds it.
-  const mishra = r.body?.users?.find((u) => u.email === 'rk.mishra@mvmgwl.ac.in');
+  const mishra = r.body?.users?.find((u) => u.email === 'rk.mishra@demo.resolion.edu');
   check('an account shows the person behind it', mishra?.name === 'Dr. Rajesh Kumar Mishra');
-  check('with their employee number', mishra?.identifier === 'MVM/FAC/CS/0047');
+  check('with their employee number', mishra?.identifier === 'GMC/FAC/CS/0047');
 
-  itTargetId = r.body?.users?.find((u) => u.email === 'kavita.jain@mvmgwl.ac.in')?.id;
+  itTargetId = r.body?.users?.find((u) => u.email === 'kavita.jain@demo.resolion.edu')?.id;
 }
 
 {
@@ -2732,7 +2732,7 @@ let itTargetId = null;
   check('an account can be unlocked', unlocked.status === 200 && unlocked.body?.locked === false);
 
   const nowIn = await call('/api/auth/login', {
-    method: 'POST', body: { email: 'sunita.yadav@mvmgwl.ac.in', password: 'campus123' },
+    method: 'POST', body: { email: 'sunita.yadav@demo.resolion.edu', password: 'campus123' },
   });
   check('and then it signs in', nowIn.status === 200, `status ${nowIn.status}`);
 
@@ -2748,7 +2748,7 @@ let itTargetId = null;
   // A console that can lock the administrator out of itself is a console
   // that can brick itself.
   const users = await call('/api/it/users', { token: adminToken });
-  const self = users.body?.users?.find((u) => u.email === 'admin@jiwaji.ac.in');
+  const self = users.body?.users?.find((u) => u.email === 'admin@demo.resolion.edu');
   const lockSelf = await call(`/api/it/users/${self?.id}/lock`, {
     method: 'POST', token: adminToken, body: { locked: true, reason: 'Locking myself out.' },
   });
@@ -2758,7 +2758,7 @@ let itTargetId = null;
 {
   // A lock that leaves live sessions running is not a lock.
   const theirs = (
-    await call('/api/auth/login', { method: 'POST', body: { email: 'kavita.jain@mvmgwl.ac.in', password: 'campus123' } })
+    await call('/api/auth/login', { method: 'POST', body: { email: 'kavita.jain@demo.resolion.edu', password: 'campus123' } })
   ).body;
   check('the account signs in beforehand', !!theirs?.accessToken);
 
@@ -2767,7 +2767,7 @@ let itTargetId = null;
   });
 
   const refused = await call('/api/auth/login', {
-    method: 'POST', body: { email: 'kavita.jain@mvmgwl.ac.in', password: 'campus123' },
+    method: 'POST', body: { email: 'kavita.jain@demo.resolion.edu', password: 'campus123' },
   });
   check('once locked it cannot sign in again', refused.status === 403, `status ${refused.status}`);
 
@@ -2931,7 +2931,7 @@ let collegeRoll = 0;
   // are at risk on attendance must see that same attendance in their own app.
   const theirs = await call('/api/auth/login', {
     method: 'POST',
-    body: { email: 'ravi.chouhan.2021@mvmgwl.ac.in', password: 'campus123' },
+    body: { email: 'ravi.chouhan.2021@demo.resolion.edu', password: 'campus123' },
   });
   const own = await call('/api/student/attendance', { token: theirs.body?.accessToken });
   const stated = ravi?.factors?.find((f) => f.factor === 'Attendance')?.value ?? '';
