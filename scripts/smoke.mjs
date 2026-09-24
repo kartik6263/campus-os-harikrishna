@@ -93,7 +93,7 @@ section('Student profile');
 {
   const r = await call('/api/student/profile', { token });
   check('profile returns 200', r.status === 200, `status ${r.status}`);
-  check('profile has the right roll number', r.body?.rollNo === 'MVM/BCA/2021/0342');
+  check('profile has the right roll number', r.body?.rollNo === 'GMC/BCA/2021/0342');
   check('Hindi name survived the round trip', r.body?.nameHi === 'प्रिया शर्मा', `got ${JSON.stringify(r.body?.nameHi)}`);
   check('college is joined in', r.body?.college?.code === 'RDU-AC-002');
 }
@@ -377,7 +377,7 @@ let rosterStudentIds = [];
   check('roster lists the whole class', r.body?.students?.length === 13, `got ${r.body?.students?.length}`);
   rosterStudentIds = (r.body?.students ?? []).map((x) => x.id);
 
-  const priya = r.body?.students?.find((x) => x.rollNo === 'MVM/BCA/2021/0342');
+  const priya = r.body?.students?.find((x) => x.rollNo === 'GMC/BCA/2021/0342');
   check('roster carries running attendance', typeof priya?.attendance === 'number' && priya.attendance > 0);
 
   // The same denominator the student portal uses.
@@ -647,7 +647,7 @@ let correctionId = null;
   check('the correction queue returns 200', pending.status === 200);
   check('two requests are waiting', pending.body?.length === 2, `got ${pending.body?.length}`);
 
-  const rahul = pending.body?.find((c) => c.rollNo === 'MVM/BCA/2021/0343');
+  const rahul = pending.body?.find((c) => c.rollNo === 'GMC/BCA/2021/0343');
   correctionId = rahul?.id;
   check('the request carries what the record says now', rahul?.markedAs === 'ABSENT');
   check('and what is being asked for', rahul?.requestedStatus === 'PRESENT');
@@ -872,13 +872,13 @@ section('Mentoring');
   check('mentees return 200', r.status === 200);
   check('five mentees', r.body?.length === 5, `got ${r.body?.length}`);
 
-  const ravi = r.body?.find((m) => m.rollNo === 'MVM/BCA/2021/0357');
+  const ravi = r.body?.find((m) => m.rollNo === 'GMC/BCA/2021/0357');
   check('the weakest mentee is flagged at risk', ravi?.atRisk === true);
   check('with the debarment warning', ravi?.alerts?.some((a) => a.includes('debarred')));
   check('the CGPA alert', ravi?.alerts?.some((a) => a.includes('CGPA')));
   check('and the backlog', ravi?.alerts?.some((a) => a.includes('backlog')));
 
-  const anjali = r.body?.find((m) => m.rollNo === 'MVM/BCA/2021/0344');
+  const anjali = r.body?.find((m) => m.rollNo === 'GMC/BCA/2021/0344');
   check('a sound mentee raises no alerts', anjali?.atRisk === false && anjali?.alerts?.length === 0);
 
   const detail = await call(`/api/faculty/mentees/${ravi?.id}`, { token: facToken });
@@ -1138,7 +1138,7 @@ section('Office — the fee counter');
   const dueBefore = own.body?.totals?.due ?? own.body?.summary?.due;
   check('the student has something outstanding', dueBefore > 1900, `due ${dueBefore}`);
 
-  const lookup = await call('/api/office/counter/student?q=MVM/BCA/2021/0349', { token: officeToken });
+  const lookup = await call('/api/office/counter/student?q=GMC/BCA/2021/0349', { token: officeToken });
   check('the counter can find a student', lookup.status === 200 && lookup.body?.name === 'Vikram Tiwari');
   check(
     'and quotes the same balance the student sees',
@@ -1224,7 +1224,7 @@ section('Office — the fee counter');
 section('Office — a bounced cheque');
 
 {
-  const lookup = await call('/api/office/counter/student?q=MVM/BCA/2021/0353', { token: officeToken });
+  const lookup = await call('/api/office/counter/student?q=GMC/BCA/2021/0353', { token: officeToken });
   const dueBefore = lookup.body?.totals?.due;
 
   const cheque = await call('/api/office/counter', {
@@ -1237,7 +1237,7 @@ section('Office — a bounced cheque');
   });
   check('a returned instrument is recorded', bounced.status === 200 && bounced.body?.status === 'BOUNCED');
 
-  const after = await call('/api/office/counter/student?q=MVM/BCA/2021/0353', { token: officeToken });
+  const after = await call('/api/office/counter/student?q=GMC/BCA/2021/0353', { token: officeToken });
   check('and the balance is untouched', after.body?.totals?.due === dueBefore, `${dueBefore} then ${after.body?.totals?.due}`);
 }
 
@@ -2626,7 +2626,7 @@ section('RTI — registering and transferring');
   check('nobody can reply before an officer is named', unassigned.status === 400, `status ${unassigned.status}`);
 
   const assigned = await call(`/api/rti/applications/${registered.body?.id}/assign`, {
-    method: 'POST', token: rtiToken, body: { pioEmployeeId: 'MVM/OFF/0009' },
+    method: 'POST', token: rtiToken, body: { pioEmployeeId: 'GMC/OFF/0009' },
   });
   check('an officer can be named', assigned.status === 200 && assigned.body?.pio?.name === 'Smt. Pushpa Sharma');
   check('which moves it to assigned', assigned.body?.status === 'ASSIGNED');
@@ -2657,7 +2657,7 @@ section('RTI — registering and transferring');
     },
   });
   await call(`/api/rti/applications/${refusal.body?.id}/assign`, {
-    method: 'POST', token: rtiToken, body: { pioEmployeeId: 'MVM/OFF/0009' },
+    method: 'POST', token: rtiToken, body: { pioEmployeeId: 'GMC/OFF/0009' },
   });
   const refused = await call(`/api/rti/applications/${refusal.body?.id}/reject`, {
     method: 'POST', token: rtiToken,

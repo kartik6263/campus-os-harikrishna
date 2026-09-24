@@ -74,6 +74,7 @@ model User {
   faculty       Faculty?       @relation("FacultyUser")
   office        OfficeStaff?   @relation("OfficeUser")
   refreshTokens RefreshToken[]
+  passwordResets PasswordReset[]
   auditEntries  AuditEntry[]   @relation("AuditActor")
 
   // A parent signs in as themselves and reads their child's record.
@@ -81,6 +82,22 @@ model User {
 
   @@index([role])
   @@map("users")
+}
+
+/// A "forgot password" link. Only the hash is stored; the token itself is
+/// emailed once, works once, and expires.
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_resets")
 }
 
 /// One row per issued refresh token, so a session can be revoked server-side

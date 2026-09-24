@@ -156,7 +156,7 @@ async function main() {
   const student = await prisma.student.create({
     data: {
       enrolmentNo: 'RDU/2021/BCA/0342',
-      rollNo: 'MVM/BCA/2021/0342',
+      rollNo: 'GMC/BCA/2021/0342',
       name: 'Priya Sharma',
       nameHi: 'प्रिया शर्मा',
       dob: d('2003-03-14'),
@@ -569,7 +569,7 @@ async function main() {
     const record = await prisma.student.create({
       data: {
         enrolmentNo: `RDU/2021/BCA/${mate.roll}`,
-        rollNo: `MVM/BCA/2021/${mate.roll}`,
+        rollNo: `GMC/BCA/2021/${mate.roll}`,
         name: mate.name,
         nameHi: mate.nameHi,
         dob: d('2003-06-01'),
@@ -785,7 +785,7 @@ async function main() {
 
   const clerk = await prisma.officeStaff.create({
     data: {
-      employeeId: 'MVM/OFF/0009',
+      employeeId: 'GMC/OFF/0009',
       name: 'Smt. Pushpa Sharma',
       nameHi: 'श्रीमती पुष्पा शर्मा',
       designation: 'Head Clerk',
@@ -802,7 +802,7 @@ async function main() {
 
   await prisma.officeStaff.create({
     data: {
-      employeeId: 'MVM/OFF/0001',
+      employeeId: 'GMC/OFF/0001',
       name: 'Sri Ravi Sharma',
       designation: 'Registrar',
       counter: 'Counter 2 — Certificates',

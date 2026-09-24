@@ -14,6 +14,14 @@ const schema = z.object({
   TURNSTILE_SECRET_KEY: z.string().optional(),
   /** Browser origins whose sign-in and sign-up must pass Turnstile. */
   TURNSTILE_ORIGINS: z.string().default('http://localhost:5173'),
+  /** The web app's address, for links in emails (password reset). */
+  APP_URL: z.string().url().default('https://campus-os-lime.vercel.app'),
+  /** Outgoing mail. Unset: reset links are not emailed. */
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().default(587),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  MAIL_FROM: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import type { Role } from '@prisma/client';
@@ -15,6 +16,9 @@ import {
 import { env } from '../env.js';
 import { captchaRequired, verifyTurnstile } from './turnstile.js';
 import { record } from '../modules/itconsole/audit.js';
+import { sendMail } from '../lib/mailer.js';
+
+const PRODUCT = 'Resolion Campus OS';
 
 export const authRouter = Router();
 
@@ -64,6 +68,7 @@ async function session(userId: string, userAgent?: string) {
       id: user.id,
       email: user.email,
       role: user.role,
+      mustChangePassword: user.mustChangePassword,
       student: user.student,
       faculty: user.faculty,
     },
@@ -164,25 +169,42 @@ authRouter.post(
   }),
 );
 
+// ─── GET /api/auth/setup ──────────────────────────────────────────────────────
+
+/** Whether this organisation's IT Cell account has still to be created. */
+async function itCellSetupOpen() {
+  return (await prisma.user.count({ where: { role: 'ADMIN' } })) === 0;
+}
+
+authRouter.get(
+  '/setup',
+  asyncHandler(async (_req, res) => {
+    res.json({ itCellSetupOpen: await itCellSetupOpen() });
+  }),
+);
+
 // ─── POST /api/auth/register ──────────────────────────────────────────────────
 
+const strongPassword = z
+  .string()
+  .min(8, 'Password must be at least 8 characters')
+  .regex(/[A-Z]/, 'Password needs an uppercase letter')
+  .regex(/[0-9]/, 'Password needs a number');
+
 /**
- * Requests an admin console account.
+ * Creates the organisation's IT Cell account — once.
  *
- * Anyone can reach this form, so what it creates cannot sign in: the account
- * starts disabled and an IT console administrator has to approve it. The
- * captcha is required here from every client, not just the browser.
+ * Only the IT Cell signs itself up; everyone else (students, faculty, staff,
+ * further IT staff) is given an ID and password by the IT Cell from inside
+ * the console. So this is open only until the first administrator exists,
+ * and the account it creates is active and signed in straight away.
  */
 authRouter.post(
   '/register',
   validate('body', z.object({
     name: z.string().trim().min(2).max(120),
     email: z.string().email(),
-    password: z
-      .string()
-      .min(8, 'Password must be at least 8 characters')
-      .regex(/[A-Z]/, 'Password needs an uppercase letter')
-      .regex(/[0-9]/, 'Password needs a number'),
+    password: strongPassword,
     turnstileToken: z.string().optional(),
   })),
   asyncHandler(async (req, res) => {
@@ -196,35 +218,171 @@ authRouter.post(
     await verifyTurnstile(req, turnstileToken);
 
     const address = email.toLowerCase();
-    const existing = await prisma.user.findUnique({ where: { email: address }, select: { id: true } });
-    if (existing) throw ApiError.conflict('An account with that email already exists');
+    const passwordHash = await bcrypt.hash(password, 10);
 
-    const user = await prisma.user.create({
-      data: {
-        email: address,
-        passwordHash: await bcrypt.hash(password, 10),
-        role: 'ADMIN',
-        isActive: false,
+    // Checked and created in one serializable transaction, so two people
+    // racing to set up the same organisation cannot both become its IT Cell.
+    const user = await prisma.$transaction(
+      async (tx) => {
+        if ((await tx.user.count({ where: { role: 'ADMIN' } })) > 0) {
+          throw ApiError.forbidden(
+            'This organisation’s IT Cell is already set up. Ask your IT Cell for an account.',
+          );
+        }
+        if (await tx.user.findUnique({ where: { email: address }, select: { id: true } })) {
+          throw ApiError.conflict('An account with that email already exists');
+        }
+        return tx.user.create({
+          data: { email: address, passwordHash, role: 'ADMIN', isActive: true, lastLoginAt: new Date() },
+          select: { id: true, email: true },
+        });
       },
-      select: { id: true, email: true, role: true, isActive: true },
-    });
+      { isolationLevel: 'Serializable' },
+    );
 
-    // The user table has no name column; the request's audit entry keeps it.
+    // The user table has no name column; the audit entry keeps it.
     await record({
       actorId: user.id,
       actorName: name,
-      actorRole: user.role,
+      actorRole: 'ADMIN',
       module: 'System Config',
-      action: 'register',
+      action: 'it-cell-setup',
       target: user.email,
-      detail: 'Admin account requested from the sign-in page; awaiting IT approval',
+      detail: 'Organisation IT Cell account created from the sign-in page',
       ip: req.ip ?? null,
       outcome: 'WARN',
     });
 
-    res.status(201).json({ ...user, pendingApproval: true });
+    const payload = await session(user.id, req.headers['user-agent']);
+    res.cookie(REFRESH_COOKIE, payload.refreshToken, cookieOptions);
+    res.status(201).json(payload);
   }),
 );
+
+// ─── POST /api/auth/forgot-password ───────────────────────────────────────────
+
+const RESET_TTL_MINUTES = 30;
+const hashToken = (t: string) => crypto.createHash('sha256').update(t).digest('hex');
+
+/**
+ * Emails a single-use link to set a new password.
+ *
+ * Open to everyone, and the answer is the same whether or not the address
+ * has an account, so it cannot be used to find out who is registered.
+ */
+authRouter.post(
+  '/forgot-password',
+  validate('body', z.object({ email: z.string().email(), turnstileToken: z.string().optional() })),
+  asyncHandler(async (req, res) => {
+    const { email, turnstileToken } = req.body as { email: string; turnstileToken?: string };
+    if (captchaRequired(req)) await verifyTurnstile(req, turnstileToken);
+
+    const generic = {
+      ok: true,
+      message: 'If that address has an account, a link to set a new password has been sent to it.',
+    };
+
+    const user = await prisma.user.findUnique({
+      where: { email: email.toLowerCase() },
+      select: { id: true, email: true, isActive: true },
+    });
+    if (!user || !user.isActive) return void res.json(generic);
+
+    // One live link a minute per account is plenty, and stops mail flooding.
+    const recent = await prisma.passwordReset.findFirst({
+      where: { userId: user.id, createdAt: { gt: new Date(Date.now() - 60_000) } },
+      select: { id: true },
+    });
+    if (recent) return void res.json(generic);
+
+    const token = crypto.randomBytes(32).toString('base64url');
+    await prisma.passwordReset.create({
+      data: {
+        userId: user.id,
+        tokenHash: hashToken(token),
+        expiresAt: new Date(Date.now() + RESET_TTL_MINUTES * 60_000),
+      },
+    });
+
+    const link = `${env.APP_URL.replace(/\/$/, '')}/?reset=${token}`;
+    const text =
+      `A new password was requested for ${user.email} on ${PRODUCT}.\n\n` +
+      `Set it here (the link works once, for ${RESET_TTL_MINUTES} minutes):\n${link}\n\n` +
+      `If you did not ask for this, ignore this email; your password is unchanged.`;
+
+    try {
+      const sent = await sendMail(user.email, `Set a new password — ${PRODUCT}`, text);
+      if (!sent && !env.isProd) {
+        // No mail server locally: print the link so it can still be tested.
+        console.log(`\n[password reset] ${user.email}\n  ${link}\n`);
+      }
+    } catch (err) {
+      console.error('Password reset email failed:', err);
+    }
+
+    res.json(generic);
+  }),
+);
+
+// ─── POST /api/auth/reset-password ────────────────────────────────────────────
+
+authRouter.post(
+  '/reset-password',
+  validate('body', z.object({ token: z.string().min(20), password: strongPassword })),
+  asyncHandler(async (req, res) => {
+    const { token, password } = req.body as { token: string; password: string };
+
+    const reset = await prisma.passwordReset.findUnique({ where: { tokenHash: hashToken(token) } });
+    if (!reset || reset.usedAt || reset.expiresAt < new Date()) {
+      throw ApiError.badRequest('This link has expired or was already used. Ask for a new one.');
+    }
+
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: reset.userId },
+        data: { passwordHash: await bcrypt.hash(password, 10), mustChangePassword: false, failedAttempts: 0 },
+      }),
+      // This link, and any other outstanding one, stops working.
+      prisma.passwordReset.updateMany({
+        where: { userId: reset.userId, usedAt: null },
+        data: { usedAt: new Date() },
+      }),
+    ]);
+
+    // Whoever knew the old password is signed out everywhere.
+    await revokeAllForUser(reset.userId);
+
+    res.json({ ok: true });
+  }),
+);
+
+// ─── POST /api/auth/change-password ───────────────────────────────────────────
+
+/** A signed-in user replaces their password — required after the IT Cell issues one. */
+authRouter.post(
+  '/change-password',
+  requireAuth,
+  validate('body', z.object({ currentPassword: z.string().min(1), newPassword: strongPassword })),
+  asyncHandler(async (req, res) => {
+    const { currentPassword, newPassword } = req.body as { currentPassword: string; newPassword: string };
+
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: req.auth!.sub } });
+    if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {
+      throw ApiError.badRequest('Your current password is not correct');
+    }
+    if (currentPassword === newPassword) {
+      throw ApiError.badRequest('Choose a password different from the current one');
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash: await bcrypt.hash(newPassword, 10), mustChangePassword: false },
+    });
+
+    res.json({ ok: true, mustChangePassword: false });
+  }),
+);
+
 
 // ─── POST /api/auth/refresh ───────────────────────────────────────────────────
 
@@ -266,6 +424,7 @@ authRouter.post(
         id: user.id,
         email: user.email,
         role: user.role,
+        mustChangePassword: user.mustChangePassword,
         student: user.student,
         faculty: user.faculty,
       },
@@ -313,6 +472,7 @@ authRouter.get(
         email: true,
         role: true,
         lastLoginAt: true,
+        mustChangePassword: true,
         student: { select: { id: true, name: true, nameHi: true, enrolmentNo: true, rollNo: true } },
         faculty: FACULTY_SUMMARY,
         wards: { select: { id: true, name: true, enrolmentNo: true } },
