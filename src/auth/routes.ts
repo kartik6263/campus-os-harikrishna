@@ -3,7 +3,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import type { Role } from '@prisma/client';
 import { z } from 'zod';
-import { prisma } from '../db.js';
+import { currentTenant, prisma } from '../db.js';
 import { ApiError, asyncHandler, validate } from '../lib/http.js';
 import { requireAuth } from './middleware.js';
 import {
@@ -22,7 +22,18 @@ const PRODUCT = 'Resolion Campus OS';
 
 export const authRouter = Router();
 
-const REFRESH_COOKIE = 'campus_rt';
+/** One cookie per institute on a shared pool, so two institutes never collide. */
+const refreshCookie = () => {
+  const tenant = currentTenant();
+  return tenant ? `campus_rt_${tenant.slug}` : 'campus_rt';
+};
+
+/** Where an institute's users open the app, for links in emails. */
+const appUrl = () => {
+  const tenant = currentTenant();
+  if (tenant && env.APP_URL_TEMPLATE) return env.APP_URL_TEMPLATE.replace('{slug}', tenant.slug);
+  return env.APP_URL;
+};
 
 // In production the web app and the API sit on different sites (Vercel and
 // Render), and a Lax cookie is never sent on a cross-site fetch. None is the
@@ -164,7 +175,7 @@ authRouter.post(
     });
 
     const payload = await session(user.id, req.headers['user-agent']);
-    res.cookie(REFRESH_COOKIE, payload.refreshToken, cookieOptions);
+    res.cookie(refreshCookie(), payload.refreshToken, cookieOptions);
     res.json(payload);
   }),
 );
@@ -254,7 +265,7 @@ authRouter.post(
     });
 
     const payload = await session(user.id, req.headers['user-agent']);
-    res.cookie(REFRESH_COOKIE, payload.refreshToken, cookieOptions);
+    res.cookie(refreshCookie(), payload.refreshToken, cookieOptions);
     res.status(201).json(payload);
   }),
 );
@@ -304,7 +315,9 @@ authRouter.post(
       },
     });
 
-    const link = `${env.APP_URL.replace(/\/$/, '')}/?reset=${token}`;
+    // The app URL may already carry ?tenant=…; add the token either way.
+    const base = appUrl().replace(/\/$/, '');
+    const link = `${base}${base.includes('?') ? '&' : '/?'}reset=${token}`;
     const text =
       `A new password was requested for ${user.email} on ${PRODUCT}.\n\n` +
       `Set it here (the link works once, for ${RESET_TTL_MINUTES} minutes):\n${link}\n\n` +
@@ -391,14 +404,14 @@ authRouter.post(
   asyncHandler(async (req, res) => {
     const supplied =
       (req.body as { refreshToken?: string } | undefined)?.refreshToken ??
-      (req.cookies?.[REFRESH_COOKIE] as string | undefined);
+      (req.cookies?.[refreshCookie()] as string | undefined);
 
     if (!supplied) throw ApiError.unauthorized('No refresh token supplied');
 
     const result = await rotateRefreshToken(supplied, req.headers['user-agent']);
 
     if (!result.ok) {
-      res.clearCookie(REFRESH_COOKIE, clearOptions);
+      res.clearCookie(refreshCookie(), clearOptions);
       throw ApiError.unauthorized(
         result.reason === 'revoked'
           ? 'This session was revoked. Sign in again.'
@@ -416,7 +429,7 @@ authRouter.post(
 
     const accessToken = signAccessToken(claimsFor(user));
 
-    res.cookie(REFRESH_COOKIE, result.token, cookieOptions);
+    res.cookie(refreshCookie(), result.token, cookieOptions);
     res.json({
       accessToken,
       refreshToken: result.token,
@@ -439,10 +452,10 @@ authRouter.post(
   asyncHandler(async (req, res) => {
     const supplied =
       (req.body as { refreshToken?: string } | undefined)?.refreshToken ??
-      (req.cookies?.[REFRESH_COOKIE] as string | undefined);
+      (req.cookies?.[refreshCookie()] as string | undefined);
 
     if (supplied) await revokeToken(supplied);
-    res.clearCookie(REFRESH_COOKIE, clearOptions);
+    res.clearCookie(refreshCookie(), clearOptions);
     res.status(204).end();
   }),
 );
@@ -454,7 +467,7 @@ authRouter.post(
   requireAuth,
   asyncHandler(async (req, res) => {
     await revokeAllForUser(req.auth!.sub);
-    res.clearCookie(REFRESH_COOKIE, clearOptions);
+    res.clearCookie(refreshCookie(), clearOptions);
     res.status(204).end();
   }),
 );

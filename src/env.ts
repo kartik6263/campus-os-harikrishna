@@ -22,6 +22,20 @@ const schema = z.object({
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
   MAIL_FROM: z.string().optional(),
+
+  // ── Phase 2: shared pool ──
+  /** true: this backend serves many institutes, each in its own schema. */
+  POOL_MODE: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+  /** Which pool this is; the control plane places institutes by this ID. */
+  POOL_ID: z.string().default('pool-1'),
+  /** The control plane, the authority on which institutes exist here. */
+  CONTROL_PLANE_URL: z.string().url().optional(),
+  /** Shared with the control plane for its create/remove calls. */
+  POOL_SECRET: z.string().min(16).optional(),
+  /** The link an institute's users open, with {slug}, for reset emails. */
+  APP_URL_TEMPLATE: z.string().optional(),
+  /** Database connections held per institute on a pool. */
+  POOL_TENANT_CONNECTIONS: z.coerce.number().default(3),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -43,3 +57,21 @@ export const env = {
   turnstileOrigins: parsed.data.TURNSTILE_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean),
   isProd: parsed.data.NODE_ENV === 'production',
 };
+
+if (env.POOL_MODE && (!env.CONTROL_PLANE_URL || !env.POOL_SECRET)) {
+  console.error('POOL_MODE=true needs CONTROL_PLANE_URL and POOL_SECRET.');
+  process.exit(1);
+}
+
+/**
+ * Whether a browser origin is in a list. An entry like
+ * `https://*.campusos.com` admits every institute's subdomain — which a
+ * shared pool needs, since it serves all of them.
+ */
+export function originAllowed(list: string[], origin: string): boolean {
+  return list.some((entry) => {
+    if (!entry.includes('*.')) return entry === origin;
+    const [scheme, host] = entry.split('*.');
+    return origin.startsWith(scheme!) && origin.endsWith(`.${host}`) && !origin.slice(scheme!.length, -host!.length - 1).includes('/');
+  });
+}

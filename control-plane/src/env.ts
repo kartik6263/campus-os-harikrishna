@@ -44,6 +44,15 @@ const schema = z.object({
   LOCAL_FIRST_PORT: z.coerce.number().default(4101),
 
   HEALTH_INTERVAL_SECONDS: z.coerce.number().default(300),
+
+  // ── Phase 2: the shared pool ──
+  /** The pool backend (POOL_MODE=true); unset means no shared pool yet. */
+  POOL_API_URL: z.string().url().optional(),
+  /** Shared with the pool backend (its POOL_SECRET). */
+  POOL_SECRET: z.string().min(16).optional(),
+  POOL_ID: z.string().default('pool-1'),
+  /** The pool's database, read directly when moving an institute out. */
+  POOL_DATABASE_URL: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

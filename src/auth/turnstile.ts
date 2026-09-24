@@ -1,5 +1,5 @@
 import type { Request } from 'express';
-import { env } from '../env.js';
+import { env, originAllowed } from '../env.js';
 import { ApiError } from '../lib/http.js';
 
 const SITEVERIFY = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
@@ -14,7 +14,7 @@ const SITEVERIFY = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 export function captchaRequired(req: Request): boolean {
   if (!env.TURNSTILE_SECRET_KEY) return false;
   const origin = req.headers.origin;
-  return !!origin && env.turnstileOrigins.includes(origin);
+  return !!origin && originAllowed(env.turnstileOrigins, origin);
 }
 
 /** Throws unless Cloudflare confirms the token. A token is good once. */

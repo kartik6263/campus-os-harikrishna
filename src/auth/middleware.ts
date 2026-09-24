@@ -2,7 +2,8 @@ import type { NextFunction, Request, Response } from 'express';
 import type { Role } from '@prisma/client';
 import { ApiError } from '../lib/http.js';
 import { verifyAccessToken, type AccessClaims } from './tokens.js';
-import { prisma } from '../db.js';
+import { currentTenant, prisma } from '../db.js';
+import { env } from '../env.js';
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -22,7 +23,13 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction) {
   }
 
   try {
-    req.auth = verifyAccessToken(header.slice(7));
+    const claims = verifyAccessToken(header.slice(7));
+    // On a shared pool, a token only works at the institute that issued it.
+    if (env.POOL_MODE && claims.tid !== currentTenant()?.slug) {
+      next(ApiError.unauthorized('This sign-in belongs to a different institute'));
+      return;
+    }
+    req.auth = claims;
     next();
   } catch (err) {
     const expired = err instanceof Error && err.name === 'TokenExpiredError';

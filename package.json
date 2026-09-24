@@ -13,7 +13,7 @@
     "generate": "prisma generate",
     "dev": "tsx watch src/index.ts",
     "build": "prisma generate && tsc -p tsconfig.json",
-    "start": "prisma migrate deploy && node scripts/seed-if-empty.mjs && node dist/src/index.js",
+    "start": "node scripts/start.mjs",
     "typecheck": "tsc --noEmit",
     "test:smoke": "tsx prisma/seed.ts && node scripts/smoke.mjs"
   },
