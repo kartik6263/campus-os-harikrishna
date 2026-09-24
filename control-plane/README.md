@@ -82,10 +82,71 @@ and runs its backend (`..`) as a process on ports from 4101. Point the web app
 at it with `VITE_CONTROL_PLANE_URL=http://localhost:4500` and open
 `http://localhost:5173/?tenant=<address>`.
 
-## Phase 2
+## Phase 2 — the shared pool
 
-When the number of institutes justifies it: a shared database pool with
-per-institute schemas or row-level tenancy for small institutes, keeping the
-dedicated database/backend path for large ones. The registry here is where
-each institute's placement is recorded, so moving one is a data migration plus
-an update to its `api_url`.
+Small institutes don't need a database and backend each. A **shared pool** is
+one backend (this same repository, `POOL_MODE=true`) and one database, where
+every institute gets its **own Postgres schema** (`t_<address>`) with the full
+set of tables. Choose the placement per institute in *New institute*:
+**Shared pool (lower cost)** or **Dedicated**.
+
+```
+  alpha.yourdomain.com ─┐                         ┌─ schema t_alpha
+  beta.yourdomain.com ──┼─▶ pool backend ─────────┼─ schema t_beta      (one database)
+  gamma.yourdomain.com ─┘   (X-Tenant: <address>) └─ schema t_gamma
+  big.yourdomain.com ─────▶ its own backend ───────▶ its own database    (dedicated)
+```
+
+How it stays isolated and safe:
+
+- **Every request names its institute** (`X-Tenant`, sent automatically by the
+  web and mobile apps). The pool asks the control plane — cached for 30 seconds,
+  refreshed instantly on suspend/resume/move — whether that institute exists,
+  is active and is placed on *this* pool, then runs the entire request inside
+  that institute's schema. The application code is unchanged: its database
+  handle points at the current institute's schema for the length of the request.
+- **Sign-ins are bound to the institute.** Access tokens carry the institute;
+  a token from one is refused at every other ("This sign-in belongs to a
+  different institute"). Refresh cookies are named per institute.
+- **One deploy upgrades everyone.** The pool's `npm start` migrates every
+  institute schema before serving.
+- **Suspend, resume and delete** work as for dedicated institutes; deleting a
+  pooled institute drops its schema.
+
+**Move to dedicated** (panel → the institute → *Move to dedicated…*): creates
+its own database and backend, copies every table from its pool schema in one
+transaction (foreign keys checked at commit, row counts verified, auto-numbers
+continued), switches the registry over, and renames the pool schema to
+`moved__t_<address>__<date>` as a backup rather than deleting it. Users see a
+short pause. If anything fails, the institute stays on the pool untouched.
+Drop the backup schema by hand once you are satisfied.
+
+### Set up a pool (once)
+
+1. **Neon** — create a database, e.g. `pool1`, for the pool.
+2. **Render** — create a Web Service from this repository (root directory
+   empty — the backend), build `npm install --include=dev && npm run build`,
+   start `npm start`, with:
+
+   | Key | Value |
+   | --- | --- |
+   | `POOL_MODE` | `true` |
+   | `POOL_ID` | `pool-1` |
+   | `DATABASE_URL` | the `pool1` connection string |
+   | `CONTROL_PLANE_URL` | the control plane's URL |
+   | `POOL_SECRET` | a long random string (same value in step 3) |
+   | `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` | long random strings |
+   | `NODE_ENV` | `production` |
+   | `CORS_ORIGINS` | `https://*.yourdomain.com,https://campus-os-lime.vercel.app` |
+   | `TURNSTILE_ORIGINS` | same as `CORS_ORIGINS` |
+   | `APP_URL_TEMPLATE` | `https://{slug}.yourdomain.com` (or `https://campus-os-lime.vercel.app/?tenant={slug}` before a domain) |
+   | `SMTP_*`, `MAIL_FROM` | optional, for password-reset emails |
+
+3. **Control plane** — add `POOL_API_URL` (the pool's URL), `POOL_SECRET`
+   (same as above), `POOL_ID=pool-1`, and `POOL_DATABASE_URL` (the `pool1`
+   connection string — read only when moving an institute out). Redeploy; the
+   *Shared pool* placement becomes available.
+
+A pool holds many institutes; `POOL_TENANT_CONNECTIONS` (default 3) caps
+database connections per active institute. When a pool fills up, a second one
+is another pool service with its own `POOL_ID` and database.

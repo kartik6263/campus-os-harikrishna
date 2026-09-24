@@ -7,7 +7,7 @@ import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { env, tenantWebUrl } from './env.js';
 import { getTenant, logEvent, pool, type Tenant } from './db.js';
-import { RESERVED_SLUGS, deleteTenant, provider, provisionTenant, resumeTenant, suspendTenant } from './provision.js';
+import { RESERVED_SLUGS, deleteTenant, moveToDedicated, provider, provisionTenant, resumeTenant, suspendTenant } from './provision.js';
 import { checkAll } from './monitor.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -23,7 +23,7 @@ const wrap = (fn: (req: Request, res: Response) => Promise<unknown>) =>
 function view(t: Tenant) {
   return {
     slug: t.slug, name: t.name, kind: t.kind, shortCode: t.short_code, status: t.status,
-    provider: t.provider, apiUrl: t.api_url, dbName: t.db_name, serviceId: t.service_id,
+    provider: t.provider, placement: t.placement, poolId: t.pool_id, apiUrl: t.api_url, dbName: t.db_name, serviceId: t.service_id,
     webUrl: tenantWebUrl(t.slug), error: t.error, healthOk: t.health_ok, healthAt: t.health_at,
     createdAt: t.created_at,
   };
@@ -59,7 +59,16 @@ export function createApp() {
     const slug = String(req.query.slug ?? '').toLowerCase();
     const t = slug ? await getTenant(slug) : null;
     if (!t) throw new HttpError(404, 'No such institute');
-    res.json({ slug: t.slug, name: t.name, status: t.status, apiUrl: t.status === 'active' ? t.api_url : null });
+    res.json({
+      slug: t.slug,
+      name: t.name,
+      status: t.status,
+      placement: t.placement,
+      pool: t.pool_id,
+      apiUrl: t.status === 'active' ? t.api_url : null,
+      // On a shared pool the app sends this as X-Tenant on every request.
+      tenantHeader: t.placement === 'pooled' ? t.slug : null,
+    });
   }));
 
   // ─── Owner sign-in ─────────────────────────────────────────────────────────
@@ -78,7 +87,7 @@ export function createApp() {
 
   api.get('/tenants', wrap(async (_req, res) => {
     const { rows } = await pool.query<Tenant>('SELECT * FROM tenants ORDER BY created_at DESC');
-    res.json({ provisioner: env.PROVISIONER, baseDomain: env.BASE_DOMAIN ?? null, tenants: rows.map(view) });
+    res.json({ provisioner: env.PROVISIONER, baseDomain: env.BASE_DOMAIN ?? null, poolAvailable: Boolean(env.POOL_API_URL && env.POOL_SECRET), tenants: rows.map(view) });
   }));
 
   api.get('/tenants/:slug', wrap(async (req, res) => {
@@ -99,11 +108,15 @@ export function createApp() {
       name: z.string().trim().min(2).max(160),
       kind: z.enum(['University', 'College', 'School', 'Institute', 'Academy', 'Other']).default('University'),
       shortCode: z.string().trim().max(6).optional(),
+      placement: z.enum(['dedicated', 'pooled']).default('dedicated'),
     }).parse(req.body);
     if (await getTenant(body.slug)) throw new HttpError(409, 'That address is already taken');
+    if (body.placement === 'pooled' && !(env.POOL_API_URL && env.POOL_SECRET)) {
+      throw new HttpError(400, 'No shared pool is configured yet; choose Dedicated or set POOL_API_URL and POOL_SECRET');
+    }
     const { rows } = await pool.query<Tenant>(
-      `INSERT INTO tenants (slug, name, kind, short_code, status, provider) VALUES ($1, $2, $3, $4, 'provisioning', $5) RETURNING *`,
-      [body.slug, body.name, body.kind, body.shortCode?.toUpperCase() || null, provider.name],
+      `INSERT INTO tenants (slug, name, kind, short_code, status, provider, placement) VALUES ($1, $2, $3, $4, 'provisioning', $5, $6) RETURNING *`,
+      [body.slug, body.name, body.kind, body.shortCode?.toUpperCase() || null, provider.name, body.placement],
     );
     await logEvent(rows[0]!.id, 'info', `Registered "${body.name}"`);
     void provisionTenant(body.slug);
@@ -134,6 +147,13 @@ export function createApp() {
   api.post('/tenants/:slug/suspend', act(suspendTenant, ['active']));
   api.post('/tenants/:slug/resume', act(resumeTenant, ['suspended']));
   api.post('/tenants/:slug/check', act(async () => { await checkAll(); }));
+  api.post('/tenants/:slug/move', wrap(async (req, res) => {
+    const t = await getTenant(String(req.params.slug));
+    if (!t) throw new HttpError(404, 'No such institute');
+    if (t.placement !== 'pooled' || t.status !== 'active') throw new HttpError(409, 'Only an active institute on the shared pool can move');
+    void moveToDedicated(t);
+    res.status(202).json({ ok: true });
+  }));
   api.delete('/tenants/:slug', wrap(async (req, res) => {
     const t = await getTenant(String(req.params.slug));
     if (!t) throw new HttpError(404, 'No such institute');

@@ -3,7 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
-import { env } from './env.js';
+import { env, originAllowed } from './env.js';
 import { errorHandler, notFoundHandler } from './lib/http.js';
 import { requireAuth } from './auth/middleware.js';
 import { authRouter } from './auth/routes.js';
@@ -23,6 +23,7 @@ import { itRouter } from './modules/itconsole/index.js';
 import { intelligenceRouter } from './modules/intelligence/index.js';
 import { studentRevaluationRouter } from './modules/exam/results.js';
 import { institutionRouter } from './modules/institution.js';
+import { poolRouter, tenantScope } from './tenancy.js';
 
 export function createApp() {
   const app = express();
@@ -40,7 +41,7 @@ export function createApp() {
       // Allow tools with no Origin (curl, the Expo native runtime) through,
       // but keep browsers restricted to the configured list.
       origin(origin, cb) {
-        if (!origin || env.corsOrigins.includes(origin)) return cb(null, true);
+        if (!origin || originAllowed(env.corsOrigins, origin)) return cb(null, true);
         // No CORS headers, so the browser blocks it; not a 500 in the logs.
         cb(null, false);
       },
@@ -49,8 +50,19 @@ export function createApp() {
   );
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, service: 'campus-os-api', env: env.NODE_ENV, time: new Date() });
+    res.json({
+      ok: true,
+      service: 'campus-os-api',
+      env: env.NODE_ENV,
+      ...(env.POOL_MODE ? { pool: env.POOL_ID } : {}),
+      time: new Date(),
+    });
   });
+
+  // Phase 2: on a shared pool, the control plane adds and removes institutes
+  // here, and every other request runs inside its institute's schema.
+  app.use('/internal/pool', poolRouter);
+  app.use(tenantScope);
 
   app.use('/api/auth', authRouter);
   app.use('/api/institution', institutionRouter);

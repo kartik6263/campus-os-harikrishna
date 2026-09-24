@@ -3,7 +3,8 @@ import { env } from './env.js';
 
 export const pool = new pg.Pool({ connectionString: env.DATABASE_URL });
 
-export type TenantStatus = 'provisioning' | 'deploying' | 'active' | 'failed' | 'suspended' | 'deleting';
+export type TenantStatus = 'provisioning' | 'deploying' | 'active' | 'failed' | 'suspended' | 'deleting' | 'moving';
+export type Placement = 'dedicated' | 'pooled';
 
 export interface Tenant {
   id: number;
@@ -13,6 +14,9 @@ export interface Tenant {
   short_code: string | null;
   status: TenantStatus;
   provider: 'local' | 'cloud' | 'external';
+  /** Phase 1 own database + backend, or a schema on a shared pool. */
+  placement: Placement;
+  pool_id: string | null;
   api_url: string | null;
   db_name: string | null;
   service_id: string | null;
@@ -53,6 +57,8 @@ export async function migrate() {
       message    text NOT NULL
     );
     CREATE INDEX IF NOT EXISTS tenant_events_tenant ON tenant_events (tenant_id, at DESC);
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS placement text NOT NULL DEFAULT 'dedicated';
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS pool_id text;
   `);
 }
 

@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import jwt, { type SignOptions } from 'jsonwebtoken';
 import type { Role } from '@prisma/client';
 import { env } from '../env.js';
-import { prisma } from '../db.js';
+import { currentTenant, prisma } from '../db.js';
 
 export interface AccessClaims {
   sub: string;
@@ -13,10 +13,13 @@ export interface AccessClaims {
   facultyId?: string;
   /** Heads of department approve marks and leave, so it rides in the token. */
   isHod?: boolean;
+  /** On a shared pool: the institute the token was issued by. */
+  tid?: string;
 }
 
 export function signAccessToken(claims: AccessClaims): string {
-  return jwt.sign(claims, env.JWT_ACCESS_SECRET, {
+  const tenant = currentTenant();
+  return jwt.sign(tenant ? { ...claims, tid: tenant.slug } : claims, env.JWT_ACCESS_SECRET, {
     expiresIn: env.ACCESS_TOKEN_TTL,
     issuer: 'campus-os',
   } as SignOptions);

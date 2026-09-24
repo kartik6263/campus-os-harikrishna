@@ -33,7 +33,7 @@
   .muted { color:var(--muted); font-size:12px; }
   .pill { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; }
   .s-active { background:#E3F4EE; color:var(--ok); } .s-failed { background:#FDE8E8; color:var(--bad); }
-  .s-suspended { background:#EEF0F3; color:var(--muted); } .s-provisioning, .s-deploying, .s-deleting { background:#FEF3DD; color:var(--warn); }
+  .s-suspended { background:#EEF0F3; color:var(--muted); } .s-provisioning, .s-deploying, .s-deleting, .s-moving { background:#FEF3DD; color:var(--warn); }
   .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
   .err { color:var(--bad); font-size:13px; margin-top:8px; }
   .events { max-height:260px; overflow:auto; font-size:12px; }
@@ -73,6 +73,7 @@
         <div><label>Address (subdomain)</label><input name="slug" required placeholder="sunrise" pattern="[a-z][a-z0-9-]{1,28}[a-z0-9]" title="3–30 lowercase letters, numbers or hyphens" /></div>
         <div><label>Type</label><select name="kind"><option>University</option><option>College</option><option>School</option><option>Institute</option><option>Academy</option><option>Other</option></select></div>
         <div><label>Short code (optional)</label><input name="shortCode" maxlength="6" placeholder="SPS" /></div>
+        <div><label>Placement</label><select name="placement" id="placement"><option value="pooled">Shared pool (lower cost)</option><option value="dedicated">Dedicated (own database + backend)</option></select></div>
         <div><button class="primary" type="submit" id="createBtn">Create institute</button></div>
       </form>
       <div id="newErr" class="err"></div>
@@ -81,7 +82,7 @@
     <div class="card">
       <h2>Institutes <span id="count" class="muted"></span></h2>
       <table>
-        <thead><tr><th>Institute</th><th>Status</th><th>Health</th><th class="hide-sm">Backend</th><th class="hide-sm">Created</th></tr></thead>
+        <thead><tr><th>Institute</th><th>Placement</th><th>Status</th><th>Health</th><th class="hide-sm">Backend</th><th class="hide-sm">Created</th></tr></thead>
         <tbody id="rows"></tbody>
       </table>
       <p id="empty" class="muted" hidden>No institutes yet. Create the first one above.</p>
@@ -142,6 +143,7 @@ async function refresh() {
   $('#rows').innerHTML = data.tenants.map((t) => `
     <tr class="row" data-slug="${esc(t.slug)}">
       <td><div style="font-weight:500">${esc(t.name)}</div><div class="mono muted">${esc(t.slug)} · ${esc(t.kind)}</div></td>
+      <td>${t.placement === 'pooled' ? 'Shared pool' : 'Dedicated'}</td>
       <td><span class="pill s-${esc(t.status)}">${esc(t.status)}</span></td>
       <td>${t.healthOk === null ? '<span class="muted">—</span>' : `<span class="dot" style="background:${t.healthOk ? 'var(--ok)' : 'var(--bad)'}"></span>${t.healthOk ? 'up' : 'down'}`}</td>
       <td class="hide-sm mono muted">${esc(t.apiUrl ?? '—')}</td>
@@ -149,7 +151,9 @@ async function refresh() {
     </tr>`).join('');
   document.querySelectorAll('tr.row').forEach((tr) => tr.onclick = () => { selected = tr.dataset.slug; detail(); });
   if (selected) await detail();
-  const busy = data.tenants.some((t) => ['provisioning', 'deploying', 'deleting'].includes(t.status));
+  const pl = $('#placement');
+  if (pl && !data.poolAvailable) { pl.value = 'dedicated'; pl.querySelector('option[value=pooled]').disabled = true; }
+  const busy = data.tenants.some((t) => ['provisioning', 'deploying', 'deleting', 'moving'].includes(t.status));
   clearTimeout(timer); timer = setTimeout(() => token && refresh().catch(() => {}), busy ? 3000 : 30000);
 }
 
@@ -164,12 +168,14 @@ async function detail() {
       <div><div class="muted">Site (IT Cell sets up here)</div><a href="${esc(t.webUrl)}" target="_blank" rel="noreferrer" class="mono">${esc(t.webUrl)}</a></div>
       <div><div class="muted">Backend</div><div class="mono">${esc(t.apiUrl ?? '—')}</div></div>
       <div><div class="muted">Database</div><div class="mono">${esc(t.dbName ?? '—')}</div></div>
+      <div><div class="muted">Placement</div><div>${t.placement === 'pooled' ? `Shared pool ${esc(t.poolId ?? '')} · schema <span class="mono">${esc(t.dbName ?? '')}</span>` : 'Dedicated'}</div></div>
       <div><div class="muted">Provider</div><div>${esc(t.provider)}${t.serviceId ? ` · <span class="mono">${esc(t.serviceId)}</span>` : ''}</div></div>
     </div>
     ${t.error ? `<div class="err">${esc(t.error)}</div>` : ''}
     <div class="actions">
       ${t.status === 'failed' ? '<button class="primary" data-act="retry">Retry</button>' : ''}
       ${t.status === 'active' ? '<button data-act="check">Check health now</button><button data-act="suspend">Suspend</button>' : ''}
+      ${t.status === 'active' && t.placement === 'pooled' ? '<button data-act="move">Move to dedicated…</button>' : ''}
       ${t.status === 'suspended' ? '<button class="primary" data-act="resume">Resume</button>' : ''}
       <button class="danger" data-act="delete">Delete institute…</button>
     </div>
@@ -185,6 +191,9 @@ async function act(t, action) {
       if (typed !== t.slug) return;
       await call('/api/tenants/' + t.slug, { method: 'DELETE', body: JSON.stringify({ confirm: typed }) });
       selected = null; $('#detail').hidden = true;
+    } else if (action === 'move') {
+      if (!confirm(`Move ${t.name} to its own database and backend? Its users see a short pause while the data is copied.`)) return;
+      await call(`/api/tenants/${t.slug}/move`, { method: 'POST' });
     } else {
       await call(`/api/tenants/${t.slug}/${action}`, { method: 'POST' });
     }
