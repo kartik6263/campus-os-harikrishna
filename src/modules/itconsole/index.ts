@@ -113,6 +113,67 @@ itRouter.get(
   }),
 );
 
+// ─── POST /api/it/colleges ────────────────────────────────────────────────────
+
+/** Adds a campus, college or school wing that records sit under. */
+itRouter.post(
+  '/colleges',
+  requirePermission('System Config', 'edit'),
+  validate('body', z.object({
+    code: z.string().trim().min(2).max(30).transform((s) => s.toUpperCase()),
+    name: z.string().trim().min(2).max(160),
+    district: z.string().trim().max(80).optional(),
+  })),
+  asyncHandler(async (req, res) => {
+    const body = req.body as { code: string; name: string; district?: string };
+    if (await prisma.college.findUnique({ where: { code: body.code }, select: { id: true } })) {
+      throw ApiError.conflict('A campus with that code already exists');
+    }
+    const college = await prisma.college.create({
+      data: { code: body.code, name: body.name, district: body.district || null },
+      select: { id: true, code: true, name: true },
+    });
+    await recordFor(req, { module: 'System Config', action: 'add-college', target: college.name, detail: college.code, outcome: 'OK' });
+    res.status(201).json(college);
+  }),
+);
+
+// ─── POST /api/it/programmes ──────────────────────────────────────────────────
+
+/** Adds a programme — a degree course, or a class/grade at a school. */
+itRouter.post(
+  '/programmes',
+  requirePermission('System Config', 'edit'),
+  validate('body', z.object({
+    code: z.string().trim().min(1).max(30).transform((s) => s.toUpperCase()),
+    name: z.string().trim().min(2).max(160),
+    shortName: z.string().trim().max(40).optional(),
+    years: z.coerce.number().int().min(1).max(12).default(3),
+    collegeId: z.string().optional(),
+  })),
+  asyncHandler(async (req, res) => {
+    const body = req.body as { code: string; name: string; shortName?: string; years: number; collegeId?: string };
+    if (await prisma.programme.findUnique({ where: { code: body.code }, select: { id: true } })) {
+      throw ApiError.conflict('A programme with that code already exists');
+    }
+    if (body.collegeId && !(await prisma.college.findUnique({ where: { id: body.collegeId }, select: { id: true } }))) {
+      throw ApiError.badRequest('No such campus');
+    }
+    const programme = await prisma.programme.create({
+      data: {
+        code: body.code,
+        name: body.name,
+        shortName: body.shortName || body.code,
+        years: body.years,
+        collegeId: body.collegeId || null,
+      },
+      select: { id: true, code: true, name: true, years: true, collegeId: true },
+    });
+    await recordFor(req, { module: 'System Config', action: 'add-programme', target: programme.name, detail: programme.code, outcome: 'OK' });
+    res.status(201).json(programme);
+  }),
+);
+
 // ─── POST /api/it/users ───────────────────────────────────────────────────────
 
 const PROVISION_ROLES = ['STUDENT', 'PARENT', 'FACULTY', 'PRINCIPAL', 'OFFICE', 'REGISTRAR', 'ADMIN'] as const;
