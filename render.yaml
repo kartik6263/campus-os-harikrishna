@@ -12,6 +12,9 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # The demo deployment gets demo data; institutes start empty.
+      - key: SEED_DEMO
+        value: "true"
       # Neon's direct (non-pooled) connection string, ending ?sslmode=require
       - key: DATABASE_URL
         sync: false
@@ -22,4 +25,41 @@ services:
       - key: CORS_ORIGINS
         value: https://campus-os-lime.vercel.app
       - key: TURNSTILE_ORIGINS
+        value: https://campus-os-lime.vercel.app
+
+  # The Resolion control plane: the registry of institutes, one-click
+  # provisioning (a Neon database + a Render backend per institute, all from
+  # this repository), and health monitoring. See control-plane/README.md.
+  - type: web
+    name: resolion-control-plane
+    runtime: node
+    plan: free
+    rootDir: control-plane
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PROVISIONER
+        value: cloud
+      - key: CONTROL_PLANE_SECRET
+        generateValue: true
+      - key: CONTROL_PLANE_PASSWORD
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: NEON_API_KEY
+        sync: false
+      - key: NEON_PROJECT_ID
+        sync: false
+      - key: NEON_BRANCH_ID
+        sync: false
+      - key: RENDER_API_KEY
+        sync: false
+      - key: RENDER_OWNER_ID
+        sync: false
+      - key: BASE_DOMAIN
+        sync: false
+      - key: WEB_APP_URL
         value: https://campus-os-lime.vercel.app
