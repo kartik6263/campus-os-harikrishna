@@ -2,6 +2,7 @@
   "expo": {
     "name": "Campus OS",
     "slug": "campus-os",
+    "owner": "harikrishna-campuss-team",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "campusos",
@@ -35,6 +36,11 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "8bde4aa9-6c13-48d4-8261-329b1b7ee565"
+      }
     }
   }
 }
