@@ -46,13 +46,13 @@ if (!parsed.success) {
   process.exit(1);
 }
 
-/** The deployed web app, allowed whatever CORS_ORIGINS says. */
-const WEB_APP_ORIGIN = 'https://campus-os-lime.vercel.app';
+/** The deployed web apps (Vercel, and the Expo web build), allowed whatever CORS_ORIGINS says. */
+const WEB_APP_ORIGINS = ['https://campus-os-lime.vercel.app', 'https://campus-os.expo.app'];
 
 export const env = {
   ...parsed.data,
   corsOrigins: [
-    ...new Set([...parsed.data.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean), WEB_APP_ORIGIN]),
+    ...new Set([...parsed.data.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean), ...WEB_APP_ORIGINS]),
   ],
   turnstileOrigins: parsed.data.TURNSTILE_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean),
   isProd: parsed.data.NODE_ENV === 'production',
