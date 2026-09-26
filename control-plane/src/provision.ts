@@ -7,6 +7,13 @@ import { copySchemaToDatabase, poolCall, schemaFor } from './pool.js';
 
 export const provider: Provider = env.PROVISIONER === 'cloud' ? cloudProvider : localProvider;
 
+/** Connection failures (AggregateError) carry an empty message; fall back to their code. */
+function errorText(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const code = (err as { code?: string }).code;
+  return err.message || (code ? `${code} (${err.name})` : err.name);
+}
+
 /** Subdomains an institute cannot take. */
 export const RESERVED_SLUGS = new Set(['www', 'app', 'api', 'admin', 'control', 'demo', 'mail', 'status', 'help', 'support']);
 
@@ -60,7 +67,7 @@ export async function provisionTenant(slug: string): Promise<void> {
     await updateTenant(t.id, { status: 'active', health_ok: true, health_at: new Date(), error: null });
     await logEvent(t.id, 'info', `Live. Its IT Cell sets up at ${tenantWebUrl(t.slug)}`);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorText(err);
     await updateTenant(t!.id, { status: 'failed', error: message });
     await logEvent(t!.id, 'error', message);
   }
@@ -79,7 +86,7 @@ async function provisionPooled(t: Tenant): Promise<void> {
     await updateTenant(t.id, { api_url: apiUrl, db_name: schemaFor(t.slug), status: 'active', health_ok: true, health_at: new Date() });
     await logEvent(t.id, 'info', `Live on the shared pool. Its IT Cell sets up at ${tenantWebUrl(t.slug)}`);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorText(err);
     await updateTenant(t.id, { status: 'failed', error: message });
     await logEvent(t.id, 'error', message);
   }
@@ -121,7 +128,7 @@ export async function moveToDedicated(t: Tenant): Promise<void> {
     const kept = (await poolCall(`/tenants/${t.slug}/retire`, { method: 'POST' })) as { keptAs?: string };
     await log(`Moved to dedicated. The pool's copy is kept as schema ${kept?.keptAs ?? '(renamed)'}.`);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorText(err);
     // The pool's data was only read, so the institute simply stays pooled.
     await updateTenant(t.id, { status: 'active', error: `Move failed: ${message}` });
     await refreshOnPool(t);
