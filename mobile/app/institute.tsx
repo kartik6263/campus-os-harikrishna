@@ -3,7 +3,7 @@ import { router } from 'expo-router';
 import { Button, InlineAlert, Input, Text } from '@/components';
 import { AuthFrame } from '@/components/AuthFrame';
 import { useLang } from '@/lib/language';
-import { InstituteLookupError, lookUpInstitute, useInstitute } from '@/lib/institute';
+import { InstituteLookupError, LOCKED_INSTITUTE, LOCKED_INSTITUTE_NAME, lookUpInstitute, useInstitute } from '@/lib/institute';
 
 /** First launch: which institute is this phone for? */
 export default function ChooseInstitute() {
@@ -24,7 +24,7 @@ export default function ChooseInstitute() {
     setError(null);
     setBusy(true);
     try {
-      const inst = await lookUpInstitute(code);
+      const inst = await lookUpInstitute(LOCKED_INSTITUTE ?? code);
       await choose(inst);
       router.replace('/login');
     } catch (err) {
@@ -34,11 +34,21 @@ export default function ChooseInstitute() {
     }
   }
 
+  // An institute's own app only reaches here when it could not look itself up.
+  if (LOCKED_INSTITUTE) {
+    return (
+      <AuthFrame mark="R" title={LOCKED_INSTITUTE_NAME ?? 'Resolion Campus OS'} subtitle={t('Connecting…', 'कनेक्ट हो रहा है…')}>
+        <InlineAlert type="error">{error ?? messages.unreachable}</InlineAlert>
+        <Button full size="lg" loading={busy} title={t('Try again', 'पुनः प्रयास करें')} onPress={submit} />
+      </AuthFrame>
+    );
+  }
+
   return (
     <AuthFrame mark="R" title="Resolion Campus OS" subtitle={t('Find your institute', 'अपना संस्थान खोजें')}>
       <Text variant="small" tone="slate">
-        {t('Enter the institute code your school, college or university gave you — for example, "sunrise".',
-          'अपने स्कूल, कॉलेज या विश्वविद्यालय द्वारा दिया गया संस्थान कोड दर्ज करें — उदाहरण: "sunrise"।')}
+        {t('Enter your institute’s code, short code or name — for example, "sunrise".',
+          'अपने संस्थान का कोड, संक्षिप्त कोड या नाम दर्ज करें — उदाहरण: "sunrise"।')}
       </Text>
       {error ? <InlineAlert type="error">{error}</InlineAlert> : null}
       <Input
@@ -51,7 +61,7 @@ export default function ChooseInstitute() {
         placeholder="sunrise"
         onSubmitEditing={submit}
       />
-      <Button full size="lg" loading={busy} disabled={code.trim().length < 3} title={t('Continue', 'आगे बढ़ें')} onPress={submit} />
+      <Button full size="lg" loading={busy} disabled={code.trim().length < 2} title={t('Continue', 'आगे बढ़ें')} onPress={submit} />
     </AuthFrame>
   );
 }

@@ -17,6 +17,7 @@ import {
 } from '@/components';
 import { useLang } from '@/lib/language';
 import { color, space } from '@/theme/tokens';
+import { LOCKED_INSTITUTE_NAME } from '@/lib/institute';
 import {
   inr,
   isNonTeachingDay,
@@ -60,7 +61,7 @@ export default function Dashboard() {
   return (
     <View style={{ flex: 1, backgroundColor: color.page }}>
       <AppBar
-        title={t('Resolion Campus OS', 'कैंपस ओएस')}
+        title={LOCKED_INSTITUTE_NAME ?? t('Resolion Campus OS', 'कैंपस ओएस')}
         subtitle={
           profile.data
             ? `${profile.data.programme.shortName} · ${t('Semester', 'सेमेस्टर')} ${profile.data.semester}`

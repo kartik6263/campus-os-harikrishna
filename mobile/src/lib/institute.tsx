@@ -13,8 +13,18 @@ import { setApiBase, store, tokens } from './api';
 const CONTROL_PLANE = process.env.EXPO_PUBLIC_CONTROL_PLANE_URL?.replace(/\/$/, '');
 const KEY = 'campus.institute';
 
+/**
+ * Set in an institute's own build (see scripts/institute-app.mjs): the app
+ * belongs to that institute alone, never asks for a code and cannot switch.
+ */
+export const LOCKED_INSTITUTE = process.env.EXPO_PUBLIC_INSTITUTE?.trim().toLowerCase() || null;
+export const LOCKED_INSTITUTE_NAME = process.env.EXPO_PUBLIC_INSTITUTE_NAME?.trim() || null;
+
 /** True when the app serves many institutes and must be told which. */
 export const multiInstitute = Boolean(CONTROL_PLANE);
+
+/** Whether people may switch to another institute (only in the universal app). */
+export const canChangeInstitute = multiInstitute && !LOCKED_INSTITUTE;
 
 export interface ChosenInstitute {
   slug: string;
@@ -68,10 +78,19 @@ export function InstituteProvider({ children }: { children: ReactNode }) {
     (async () => {
       try {
         const raw = await store.get(KEY);
-        if (raw) {
-          const i = JSON.parse(raw) as ChosenInstitute;
-          setApiBase(i.apiUrl, i.tenantHeader ?? null);
-          setInstitute(i);
+        const saved = raw ? (JSON.parse(raw) as ChosenInstitute) : null;
+        if (saved && (!LOCKED_INSTITUTE || saved.slug === LOCKED_INSTITUTE)) {
+          setApiBase(saved.apiUrl, saved.tenantHeader ?? null);
+          setInstitute(saved);
+        } else if (LOCKED_INSTITUTE) {
+          // An institute's own app looks itself up; if that fails, the
+          // institute screen offers a retry instead of a code field.
+          const i = await lookUpInstitute(LOCKED_INSTITUTE).catch(() => null);
+          if (i) {
+            setApiBase(i.apiUrl, i.tenantHeader ?? null);
+            await store.set(KEY, JSON.stringify(i));
+            setInstitute(i);
+          }
         }
       } finally {
         setReady(true);

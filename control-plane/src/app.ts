@@ -6,7 +6,7 @@ import helmet from 'helmet';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { env, tenantWebUrl } from './env.js';
-import { getTenant, findTenant, logEvent, pool, type Tenant } from './db.js';
+import { getTenant, findTenant, logEvent, updateTenant, pool, type Tenant } from './db.js';
 import { RESERVED_SLUGS, deleteTenant, moveToDedicated, provider, provisionTenant, resumeTenant, suspendTenant } from './provision.js';
 import { checkAll } from './monitor.js';
 
@@ -23,7 +23,7 @@ const wrap = (fn: (req: Request, res: Response) => Promise<unknown>) =>
 function view(t: Tenant) {
   return {
     slug: t.slug, name: t.name, kind: t.kind, shortCode: t.short_code, status: t.status,
-    provider: t.provider, placement: t.placement, poolId: t.pool_id, apiUrl: t.api_url, dbName: t.db_name, serviceId: t.service_id,
+    provider: t.provider, placement: t.placement, appPlan: t.app_plan, appName: t.app_name ?? t.name, poolId: t.pool_id, apiUrl: t.api_url, dbName: t.db_name, serviceId: t.service_id,
     webUrl: tenantWebUrl(t.slug), error: t.error, healthOk: t.health_ok, healthAt: t.health_at,
     createdAt: t.created_at,
   };
@@ -68,6 +68,7 @@ export function createApp() {
       apiUrl: t.status === 'active' ? t.api_url : null,
       // On a shared pool the app sends this as X-Tenant on every request.
       tenantHeader: t.placement === 'pooled' ? t.slug : null,
+      appPlan: t.app_plan,
     });
   }));
 
@@ -109,14 +110,17 @@ export function createApp() {
       kind: z.enum(['University', 'College', 'School', 'Institute', 'Academy', 'Other']).default('University'),
       shortCode: z.string().trim().max(6).optional(),
       placement: z.enum(['dedicated', 'pooled']).default('dedicated'),
+      appPlan: z.enum(['universal', 'own']).default('universal'),
+      appName: z.string().trim().max(30).optional(),
     }).parse(req.body);
     if (await getTenant(body.slug)) throw new HttpError(409, 'That address is already taken');
     if (body.placement === 'pooled' && !(env.POOL_API_URL && env.POOL_SECRET)) {
       throw new HttpError(400, 'No shared pool is configured yet; choose Dedicated or set POOL_API_URL and POOL_SECRET');
     }
     const { rows } = await pool.query<Tenant>(
-      `INSERT INTO tenants (slug, name, kind, short_code, status, provider, placement) VALUES ($1, $2, $3, $4, 'provisioning', $5, $6) RETURNING *`,
-      [body.slug, body.name, body.kind, body.shortCode?.toUpperCase() || null, provider.name, body.placement],
+      `INSERT INTO tenants (slug, name, kind, short_code, status, provider, placement, app_plan, app_name)
+       VALUES ($1, $2, $3, $4, 'provisioning', $5, $6, $7, $8) RETURNING *`,
+      [body.slug, body.name, body.kind, body.shortCode?.toUpperCase() || null, provider.name, body.placement, body.appPlan, body.appName || null],
     );
     await logEvent(rows[0]!.id, 'info', `Registered "${body.name}"`);
     void provisionTenant(body.slug);
@@ -147,6 +151,20 @@ export function createApp() {
   api.post('/tenants/:slug/suspend', act(suspendTenant, ['active']));
   api.post('/tenants/:slug/resume', act(resumeTenant, ['suspended']));
   api.post('/tenants/:slug/check', act(async () => { await checkAll(); }));
+  // Upgrading to (or back from) the institute's own branded app.
+  api.post('/tenants/:slug/app', wrap(async (req, res) => {
+    const t = await getTenant(String(req.params.slug));
+    if (!t) throw new HttpError(404, 'No such institute');
+    const body = z.object({
+      appPlan: z.enum(['universal', 'own']),
+      appName: z.string().trim().max(30).optional(),
+    }).parse(req.body);
+    await updateTenant(t.id, { app_plan: body.appPlan, app_name: body.appName || t.app_name });
+    await logEvent(t.id, 'info', body.appPlan === 'own'
+      ? `Mobile: own app "${body.appName || t.app_name || t.name}"`
+      : 'Mobile: Resolion universal app');
+    res.json(view((await getTenant(t.slug))!));
+  }));
   api.post('/tenants/:slug/move', wrap(async (req, res) => {
     const t = await getTenant(String(req.params.slug));
     if (!t) throw new HttpError(404, 'No such institute');

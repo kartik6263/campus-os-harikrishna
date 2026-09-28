@@ -20,7 +20,7 @@ import {
 } from '@/components';
 import { useLang } from '@/lib/language';
 import { useAuth } from '@/lib/auth';
-import { multiInstitute, useInstitute } from '@/lib/institute';
+import { LOCKED_INSTITUTE_NAME, canChangeInstitute, multiInstitute, useInstitute } from '@/lib/institute';
 import { color, space } from '@/theme/tokens';
 import { useNotifications, useProfile } from '@/lib/queries';
 
@@ -172,12 +172,14 @@ export default function More() {
             <>
               <Divider />
               <Field label={t('Institute', 'संस्थान')} value={institute.name} />
-              <Button
-                full
-                variant="secondary"
-                title={t('Change institute', 'संस्थान बदलें')}
-                onPress={changeInstitute}
-              />
+              {canChangeInstitute ? (
+                <Button
+                  full
+                  variant="secondary"
+                  title={t('Change institute', 'संस्थान बदलें')}
+                  onPress={changeInstitute}
+                />
+              ) : null}
             </>
           ) : null}
           <Divider />
@@ -190,7 +192,7 @@ export default function More() {
         </Card>
 
         <Text variant="micro" tone="slate" center>
-          Resolion Campus OS · v1.0.0{'\n'}
+          {LOCKED_INSTITUTE_NAME ?? 'Resolion Campus OS'} · v1.0.0{'\n'}
           {student?.college.name ?? ''}
         </Text>
       </ScrollView>

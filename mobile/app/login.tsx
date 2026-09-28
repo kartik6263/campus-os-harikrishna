@@ -7,7 +7,7 @@ import { useLang } from '@/lib/language';
 import { useInstitution } from '@/lib/institution';
 import { ApiError, API_BASE } from '@/lib/api';
 import { router } from 'expo-router';
-import { multiInstitute, useInstitute } from '@/lib/institute';
+import { canChangeInstitute, multiInstitute, useInstitute } from '@/lib/institute';
 import { color, radius, space } from '@/theme/tokens';
 
 export default function Login() {
@@ -138,11 +138,13 @@ export default function Login() {
               <Text variant="micro" tone="slate" style={{ flex: 1 }}>
                 {t(`Institute: ${institute.name}`, `संस्थान: ${institute.name}`)}
               </Text>
-              <Pressable onPress={forget} hitSlop={8}>
-                <Text variant="micro" weight="semibold" tone="marigold">
-                  {t('Change', 'बदलें')}
-                </Text>
-              </Pressable>
+              {canChangeInstitute ? (
+                <Pressable onPress={forget} hitSlop={8}>
+                  <Text variant="micro" weight="semibold" tone="marigold">
+                    {t('Change', 'बदलें')}
+                  </Text>
+                </Pressable>
+              ) : null}
             </View>
           ) : null}
         </Card>

@@ -74,6 +74,8 @@
         <div><label>Type</label><select name="kind"><option>University</option><option>College</option><option>School</option><option>Institute</option><option>Academy</option><option>Other</option></select></div>
         <div><label>Short code (optional)</label><input name="shortCode" maxlength="6" placeholder="SPS" /></div>
         <div><label>Placement</label><select name="placement" id="placement"><option value="pooled">Shared pool (lower cost)</option><option value="dedicated">Dedicated (own database + backend)</option></select></div>
+        <div><label>Mobile app</label><select name="appPlan" id="appPlan"><option value="universal">Resolion universal app (standard)</option><option value="own">Own branded app (premium)</option></select></div>
+        <div id="appNameBox" hidden><label>App name (under the icon)</label><input name="appName" maxlength="30" placeholder="Sunrise School" /></div>
         <div><button class="primary" type="submit" id="createBtn">Create institute</button></div>
       </form>
       <div id="newErr" class="err"></div>
@@ -82,7 +84,7 @@
     <div class="card">
       <h2>Institutes <span id="count" class="muted"></span></h2>
       <table>
-        <thead><tr><th>Institute</th><th>Placement</th><th>Status</th><th>Health</th><th class="hide-sm">Backend</th><th class="hide-sm">Created</th></tr></thead>
+        <thead><tr><th>Institute</th><th>Placement</th><th>App</th><th>Status</th><th>Health</th><th class="hide-sm">Backend</th><th class="hide-sm">Created</th></tr></thead>
         <tbody id="rows"></tbody>
       </table>
       <p id="empty" class="muted" hidden>No institutes yet. Create the first one above.</p>
@@ -121,12 +123,15 @@ $('#loginForm').onsubmit = async (e) => {
 };
 $('#logout').onclick = signOut;
 
+$('#appPlan').onchange = (e) => { $('#appNameBox').hidden = e.target.value !== 'own'; };
+
 $('#newForm').onsubmit = async (e) => {
   e.preventDefault(); $('#newErr').textContent = '';
   const f = Object.fromEntries(new FormData(e.target));
   if (!f.shortCode) delete f.shortCode;
+  if (!f.appName || f.appPlan !== 'own') delete f.appName;
   $('#createBtn').disabled = true;
-  try { const t = await call('/api/tenants', { method: 'POST', body: JSON.stringify(f) }); e.target.reset(); selected = t.slug; await refresh(); }
+  try { const t = await call('/api/tenants', { method: 'POST', body: JSON.stringify(f) }); e.target.reset(); $('#appNameBox').hidden = true; selected = t.slug; await refresh(); }
   catch (err) { $('#newErr').textContent = err.message; }
   finally { $('#createBtn').disabled = false; }
 };
@@ -144,6 +149,7 @@ async function refresh() {
     <tr class="row" data-slug="${esc(t.slug)}">
       <td><div style="font-weight:500">${esc(t.name)}</div><div class="mono muted">${esc(t.slug)} · ${esc(t.kind)}</div></td>
       <td>${t.placement === 'pooled' ? 'Shared pool' : 'Dedicated'}</td>
+      <td>${t.appPlan === 'own' ? '<b>Own app</b>' : 'Universal'}</td>
       <td><span class="pill s-${esc(t.status)}">${esc(t.status)}</span></td>
       <td>${t.healthOk === null ? '<span class="muted">—</span>' : `<span class="dot" style="background:${t.healthOk ? 'var(--ok)' : 'var(--bad)'}"></span>${t.healthOk ? 'up' : 'down'}`}</td>
       <td class="hide-sm mono muted">${esc(t.apiUrl ?? '—')}</td>
@@ -171,6 +177,7 @@ async function detail() {
       <div><div class="muted">Placement</div><div>${t.placement === 'pooled' ? `Shared pool ${esc(t.poolId ?? '')} · schema <span class="mono">${esc(t.dbName ?? '')}</span>` : 'Dedicated'}</div></div>
       <div><div class="muted">Provider</div><div>${esc(t.provider)}${t.serviceId ? ` · <span class="mono">${esc(t.serviceId)}</span>` : ''}</div></div>
     </div>
+    ${appSection(t)}
     ${t.error ? `<div class="err">${esc(t.error)}</div>` : ''}
     <div class="actions">
       ${t.status === 'failed' ? '<button class="primary" data-act="retry">Retry</button>' : ''}
@@ -184,8 +191,35 @@ async function detail() {
   box.querySelectorAll('[data-act]').forEach((b) => b.onclick = () => act(t, b.dataset.act));
 }
 
+/** Which app this institute's people install, and how to build its own. */
+function appSection(t) {
+  const own = t.appPlan === 'own';
+  const pkg = 'in.ac.campusos.' + t.slug.replace(/[^a-z0-9]/g, '').replace(/^(d)/, 'i$1');
+  return `
+    <h2 style="margin-top:16px">Mobile app</h2>
+    ${own ? `
+      <p><b>Own branded app</b> — "${esc(t.appName)}", locked to this institute. Build it from the <span class="mono">mobile</span> folder:</p>
+      <pre class="mono" style="white-space:pre-wrap;background:rgba(127,127,127,.12);padding:10px;border-radius:6px">npm run institute-app -- ${esc(t.slug)} "${esc(t.appName)}"
+npx eas-cli build -p android --profile ${esc(t.slug)}          # APK to share
+npx eas-cli build -p android --profile ${esc(t.slug)}-store    # Play Store</pre>
+      <p class="muted">Package <span class="mono">${esc(pkg)}</span>. Optional icon: <span class="mono">mobile/assets/institutes/${esc(t.slug)}/icon.png</span> (1024×1024). People can still sign in from the universal app too.</p>`
+    : `<p><b>Resolion universal app.</b> People install Resolion Campus OS and enter <span class="mono">${esc(t.slug)}</span>${t.shortCode ? ` (or <span class="mono">${esc(t.shortCode)}</span>)` : ''}.</p>`}
+    <div class="actions">${own
+      ? '<button data-act="app-universal">Switch to universal app</button><button data-act="app-rename">Rename app…</button>'
+      : '<button class="primary" data-act="app-own">Upgrade to own app…</button>'}</div>`;
+}
+
 async function act(t, action) {
   try {
+    if (action.startsWith('app-')) {
+      let appName;
+      if (action !== 'app-universal') {
+        appName = prompt('App name shown under the icon (max 30 characters):', t.appName);
+        if (!appName) return;
+      }
+      await call(`/api/tenants/${t.slug}/app`, { method: 'POST', body: JSON.stringify({ appPlan: action === 'app-universal' ? 'universal' : 'own', appName }) });
+      return void await refresh();
+    }
     if (action === 'delete') {
       const typed = prompt(`This deletes ${t.name}'s backend AND database — all of its data. Type "${t.slug}" to confirm.`);
       if (typed !== t.slug) return;
