@@ -67,6 +67,29 @@ export async function getTenant(slug: string): Promise<Tenant | null> {
   return rows[0] ?? null;
 }
 
+/**
+ * What people type into the app: the slug, the short code or the name, in any
+ * case and with stray spaces, dots or hyphens. The slug wins; a short code or
+ * name counts only when exactly one institute has it.
+ */
+export async function findTenant(code: string): Promise<Tenant | null> {
+  const typed = code.trim().toLowerCase();
+  if (!typed) return null;
+  const exact = await getTenant(typed.replace(/\s+/g, '-'));
+  if (exact) return exact;
+  const key = typed.replace(/[^a-z0-9]/g, '');
+  if (!key) return null;
+  const { rows } = await pool.query<Tenant>(
+    `SELECT * FROM tenants
+      WHERE regexp_replace(lower(slug), '[^a-z0-9]', '', 'g') = $1
+         OR regexp_replace(lower(coalesce(short_code, '')), '[^a-z0-9]', '', 'g') = $1
+         OR regexp_replace(lower(name), '[^a-z0-9]', '', 'g') = $1
+      LIMIT 2`,
+    [key],
+  );
+  return rows.length === 1 ? rows[0] : null;
+}
+
 export async function updateTenant(id: number, patch: Partial<Omit<Tenant, 'id' | 'created_at'>>) {
   const keys = Object.keys(patch);
   if (!keys.length) return;

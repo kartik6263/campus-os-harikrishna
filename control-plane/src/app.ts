@@ -6,7 +6,7 @@ import helmet from 'helmet';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { env, tenantWebUrl } from './env.js';
-import { getTenant, logEvent, pool, type Tenant } from './db.js';
+import { getTenant, findTenant, logEvent, pool, type Tenant } from './db.js';
 import { RESERVED_SLUGS, deleteTenant, moveToDedicated, provider, provisionTenant, resumeTenant, suspendTenant } from './provision.js';
 import { checkAll } from './monitor.js';
 
@@ -57,7 +57,7 @@ export function createApp() {
     next();
   }, wrap(async (req, res) => {
     const slug = String(req.query.slug ?? '').toLowerCase();
-    const t = slug ? await getTenant(slug) : null;
+    const t = slug ? await findTenant(slug) : null;
     if (!t) throw new HttpError(404, 'No such institute');
     res.json({
       slug: t.slug,
