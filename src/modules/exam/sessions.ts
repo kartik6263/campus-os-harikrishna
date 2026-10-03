@@ -56,6 +56,119 @@ sessionsRouter.get(
   }),
 );
 
+// ─── POST /api/exam/sessions · PATCH /api/exam/sessions/:id ───────────────────
+
+const isoDate = z.string().date();
+
+/** The calendar of a sitting must run in order, or the windows make no sense. */
+function checkCalendar(d: { formOpensOn: Date; formClosesOn: Date; lateClosesOn: Date; examStartsOn: Date; examEndsOn: Date; resultTargetOn: Date }) {
+  const steps: Array<[keyof typeof d, keyof typeof d, string]> = [
+    ['formOpensOn', 'formClosesOn', 'The form window must close after it opens'],
+    ['formClosesOn', 'lateClosesOn', 'The late window must close on or after the regular one'],
+    ['lateClosesOn', 'examStartsOn', 'Examinations must start after the late window closes'],
+    ['examStartsOn', 'examEndsOn', 'Examinations must end on or after they start'],
+    ['examEndsOn', 'resultTargetOn', 'The result target must be after the last paper'],
+  ];
+  for (const [a, b, msg] of steps) {
+    const strict = a === 'formOpensOn' || a === 'lateClosesOn' || a === 'examEndsOn';
+    if (strict ? d[b] <= d[a] : d[b] < d[a]) throw ApiError.badRequest(msg);
+  }
+}
+
+const calendarBody = {
+  formOpensOn: isoDate,
+  formClosesOn: isoDate,
+  lateClosesOn: isoDate,
+  examStartsOn: isoDate,
+  examEndsOn: isoDate,
+  resultTargetOn: isoDate,
+};
+const feeBody = {
+  regularFee: z.number().int().min(0).max(100_000),
+  lateFee: z.number().int().min(0).max(100_000),
+  backlogFee: z.number().int().min(0).max(100_000),
+};
+const day = (s: string) => new Date(`${s}T00:00:00.000Z`);
+
+/** Opens a new sitting, PLANNED. Fees default to the latest sitting's unless given. */
+sessionsRouter.post(
+  '/sessions',
+  validate('body', z.object({
+    code: z.string().trim().min(3).max(40).regex(/^[A-Z0-9/_-]+$/i, 'Use letters, digits, / - _ only'),
+    name: z.string().trim().min(3).max(120),
+    academicYear: z.string().trim().regex(/^\d{4}-\d{2}$/, 'Academic year looks like 2026-27'),
+    ...calendarBody,
+    regularFee: feeBody.regularFee.optional(),
+    lateFee: feeBody.lateFee.optional(),
+    backlogFee: feeBody.backlogFee.optional(),
+  })),
+  asyncHandler(async (req, res) => {
+    await resolveExamStaffId(req);
+    const b = req.body as Record<string, string | number | undefined>;
+    const calendar = {
+      formOpensOn: day(b.formOpensOn as string), formClosesOn: day(b.formClosesOn as string),
+      lateClosesOn: day(b.lateClosesOn as string), examStartsOn: day(b.examStartsOn as string),
+      examEndsOn: day(b.examEndsOn as string), resultTargetOn: day(b.resultTargetOn as string),
+    };
+    checkCalendar(calendar);
+    const code = (b.code as string).toUpperCase();
+    if (await prisma.examSession.findUnique({ where: { code }, select: { id: true } })) {
+      throw ApiError.conflict(`A session with code ${code} already exists`);
+    }
+    const last = await prisma.examSession.findFirst({ orderBy: { examStartsOn: 'desc' }, select: { regularFee: true, lateFee: true, backlogFee: true } });
+    const created = await prisma.examSession.create({
+      data: {
+        code,
+        name: b.name as string,
+        academicYear: b.academicYear as string,
+        ...calendar,
+        regularFee: (b.regularFee as number | undefined) ?? last?.regularFee ?? 1800,
+        lateFee: (b.lateFee as number | undefined) ?? last?.lateFee ?? 500,
+        backlogFee: (b.backlogFee as number | undefined) ?? last?.backlogFee ?? 300,
+      },
+    });
+    await recordFor(req, { module: 'Examination', action: 'session-create', target: created.code, detail: created.name });
+    res.status(201).json({ id: created.id, code: created.code, status: created.status });
+  }),
+);
+
+/**
+ * Moves a sitting's dates or fees. Once the form window has closed, students
+ * have paid against these figures and the calendar is published; they are fixed.
+ */
+sessionsRouter.patch(
+  '/sessions/:id',
+  validate('params', z.object({ id: z.string().min(1) })),
+  validate('body', z.object({
+    name: z.string().trim().min(3).max(120).optional(),
+    ...Object.fromEntries(Object.entries(calendarBody).map(([k, v]) => [k, v.optional()])),
+    ...Object.fromEntries(Object.entries(feeBody).map(([k, v]) => [k, v.optional()])),
+  })),
+  asyncHandler(async (req, res) => {
+    await resolveExamStaffId(req);
+    const { id } = req.params as { id: string };
+    const session = await prisma.examSession.findUnique({ where: { id } });
+    if (!session) throw ApiError.notFound('No such examination session');
+    if (!['PLANNED', 'FORM_WINDOW_OPEN'].includes(session.status)) {
+      throw ApiError.conflict('Dates and fees are fixed once the form window has closed');
+    }
+    const b = req.body as Record<string, string | number | undefined>;
+    if (session.status === 'FORM_WINDOW_OPEN' && ['regularFee', 'lateFee', 'backlogFee', 'formOpensOn'].some((k) => b[k] !== undefined)) {
+      throw ApiError.conflict('Fees and the opening date cannot change while forms are being filled');
+    }
+    const dates = Object.fromEntries(Object.keys(calendarBody).filter((k) => b[k] !== undefined).map((k) => [k, day(b[k] as string)]));
+    const merged = { ...session, ...dates };
+    checkCalendar(merged);
+    const fees = Object.fromEntries(Object.keys(feeBody).filter((k) => b[k] !== undefined).map((k) => [k, b[k] as number]));
+    const updated = await prisma.examSession.update({
+      where: { id },
+      data: { ...(b.name ? { name: b.name as string } : {}), ...dates, ...fees },
+    });
+    await recordFor(req, { module: 'Examination', action: 'session-edit', target: updated.code, detail: Object.keys({ ...dates, ...fees, ...(b.name ? { name: 1 } : {}) }).join(', ') });
+    res.json({ id: updated.id, code: updated.code, status: updated.status });
+  }),
+);
+
 // ─── GET /api/exam/sessions/:id ───────────────────────────────────────────────
 
 /** One session with its papers and how far evaluation has got on each. */

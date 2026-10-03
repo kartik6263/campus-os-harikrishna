@@ -3,6 +3,29 @@ import { prisma } from '../../db.js';
 import { ApiError } from '../../lib/http.js';
 
 /**
+ * An administrator's own staff record, made the first time they work a desk.
+ * Everything a desk does is still signed by a named person; for an
+ * administrator acting in their own right, that person is themselves.
+ */
+export async function adminStaffId(userId: string): Promise<string> {
+  const mine = await prisma.officeStaff.findUnique({ where: { userId }, select: { id: true } });
+  if (mine) return mine.id;
+  const [user, college] = await Promise.all([
+    prisma.user.findUnique({ where: { id: userId }, select: { email: true } }),
+    prisma.college.findFirst({ select: { id: true }, orderBy: { name: 'asc' } }),
+  ]);
+  if (!user || !college) throw ApiError.forbidden('Set up the institution before using this desk');
+  const name = user.email.split('@')[0]!.replace(/[._-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const created = await prisma.officeStaff.upsert({
+    where: { userId },
+    update: {},
+    create: { userId, collegeId: college.id, employeeId: `ADM-${userId.slice(-8).toUpperCase()}`, name, designation: 'Administrator' },
+    select: { id: true },
+  });
+  return created.id;
+}
+
+/**
  * Resolves which office staff member the caller is acting as.
  *
  * Everything the counter does is signed — a verified document, a receipt, an
@@ -25,7 +48,7 @@ export async function resolveStaffId(req: Request): Promise<string> {
   if (auth.role !== 'ADMIN') throw ApiError.forbidden('This endpoint is for the college office');
 
   const requested = typeof req.query.staffId === 'string' ? req.query.staffId : undefined;
-  if (!requested) throw ApiError.badRequest('staffId is required for administrator accounts');
+  if (!requested) return adminStaffId(auth.sub);
 
   const staff = await prisma.officeStaff.findUnique({
     where: { id: requested },
@@ -58,6 +81,7 @@ export const CERTIFICATE_SLA: Record<string, { days: number; fee: number }> = {
   'Transfer Certificate': { days: 16, fee: 200 },
   'Provisional Certificate': { days: 21, fee: 300 },
   'Duplicate Marksheet': { days: 30, fee: 500 },
+  'Degree Certificate': { days: 45, fee: 1000 },
 };
 
 /** An urgent request is promised in half the time, rounded up. */

@@ -281,6 +281,7 @@ function presentBids(
     financialQuote: number;
     financialOpenedAt: Date | null;
     status: string;
+    technicalProposal?: string | null;
     vendor: { code: string; name: string; status: string };
   }>,
 ) {
@@ -304,6 +305,8 @@ function presentBids(
       submittedAt: b.submittedAt,
       technicalScore: b.technicalScore,
       technicalRemarks: b.technicalRemarks,
+      // The technical envelope is for the evaluators to read; only the price is sealed.
+      technicalProposal: b.technicalProposal ?? null,
       status: b.status,
       // Null, and plainly so, until the technical stage is decided.
       financialQuote: disclosed ? b.financialQuote : null,
@@ -943,6 +946,9 @@ procurementRouter.get(
         nextStages: NEXT_PO_STAGE[o.status] ?? [],
         grnNo: o.grnNo,
         invoiceNo: o.invoiceNo,
+        invoiceAmount: o.invoiceAmount,
+        invoiceDate: o.invoiceDate,
+        acknowledgedAt: o.acknowledgedAt,
         billPassedOn: o.billPassedOn,
         paymentDate: o.paymentDate,
         paymentRef: o.paymentRef,
@@ -1083,6 +1089,30 @@ procurementRouter.post(
       paymentDate: updated.paymentDate,
       paymentRef: updated.paymentRef,
       fullyDelivered: complete,
+    });
+  }),
+);
+
+// ─── GET /api/procurement/sanctions ───────────────────────────────────────────
+
+/** Approved procurement requests a new tender can stand on: the sanction and how much of it is free. */
+procurementRouter.get(
+  '/sanctions',
+  asyncHandler(async (_req, res) => {
+    const requests = await prisma.governanceRequest.findMany({
+      where: { kind: 'PROCUREMENT', status: 'APPROVED' },
+      orderBy: { decidedAt: 'desc' },
+      select: { requestNo: true, subject: true, amount: true, decidedAt: true, tenders: { select: { refNo: true, status: true } } },
+    });
+    res.json({
+      sanctions: requests.map((r) => ({
+        requestNo: r.requestNo,
+        subject: r.subject,
+        amount: r.amount,
+        decidedAt: r.decidedAt,
+        tenders: r.tenders.map((t) => t.refNo),
+        inUse: r.tenders.some((t) => t.status !== 'CANCELLED'),
+      })),
     });
   }),
 );

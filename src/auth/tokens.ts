@@ -13,6 +13,8 @@ export interface AccessClaims {
   facultyId?: string;
   /** Heads of department approve marks and leave, so it rides in the token. */
   isHod?: boolean;
+  /** Present only for VENDOR users: the supplier they act for. */
+  vendorId?: string;
   /** On a shared pool: the institute the token was issued by. */
   tid?: string;
 }

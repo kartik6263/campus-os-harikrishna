@@ -249,6 +249,42 @@ mentoringRouter.get(
   }),
 );
 
+// ─── POST /api/faculty/mentees/:studentId/notify ──────────────────────────────
+
+/**
+ * A mentor's notice to a mentee (their parent reads it on the ward's account),
+ * or a referral to the college counsellor. Either is also logged on the
+ * mentoring record, so the trail shows it was done.
+ */
+mentoringRouter.post(
+  '/mentees/:studentId/notify',
+  validate('params', z.object({ studentId: z.string().min(1) })),
+  validate('body', z.object({ kind: z.enum(['notice', 'referral']), message: z.string().trim().min(5).max(1000) })),
+  asyncHandler(async (req, res) => {
+    const facultyId = await resolveFacultyId(req);
+    const { studentId } = req.params as { studentId: string };
+    const { kind, message } = req.body as { kind: 'notice' | 'referral'; message: string };
+    const mentorship = await prisma.mentorship.findUnique({
+      where: { facultyId_studentId: { facultyId, studentId } },
+      select: { id: true, faculty: { select: { name: true } } },
+    });
+    if (!mentorship) throw ApiError.notFound('That student is not one of your mentees');
+    const now = new Date();
+    await prisma.$transaction([
+      prisma.notification.create({
+        data: {
+          studentId, kind: 'GENERAL', urgent: kind === 'notice',
+          title: kind === 'notice' ? `Notice from your mentor, ${mentorship.faculty.name}` : 'You have been referred to the college counsellor',
+          body: kind === 'notice' ? message : `${mentorship.faculty.name} has asked the counsellor to meet you. ${message}`,
+        },
+      }),
+      prisma.mentorNote.create({ data: { mentorshipId: mentorship.id, authorId: facultyId, note: `${kind === 'notice' ? 'Notice sent' : 'Referred to counsellor'}: ${message}` } }),
+      prisma.mentorship.update({ where: { id: mentorship.id }, data: { lastInteractionAt: now } }),
+    ]);
+    res.status(201).json({ ok: true });
+  }),
+);
+
 // ─── POST /api/faculty/mentees/:studentId/notes ───────────────────────────────
 
 /** Logs a mentoring interaction, which is also what dates the pairing. */

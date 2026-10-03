@@ -545,6 +545,10 @@ studentRevaluationRouter.post(
         originalMark: script.finalMark,
       },
     });
+    // The fee goes on the student's fee account, to pay like any other.
+    await prisma.feeItem.create({
+      data: { studentId, head: `Revaluation fee — ${created.applicationNo} (${subjectCode})`, category: 'EXAM', amount: created.fee, term: script.paper.session.code, dueDate: new Date(Date.now() + 7 * 86_400_000) },
+    });
 
     res.status(201).json({
       id: created.id,

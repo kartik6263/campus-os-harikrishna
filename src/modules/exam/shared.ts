@@ -1,6 +1,7 @@
 import type { Request } from 'express';
 import { prisma } from '../../db.js';
 import { ApiError } from '../../lib/http.js';
+import { adminStaffId } from '../office/shared.js';
 
 /**
  * Who signs for the back-office.
@@ -25,7 +26,7 @@ export async function resolveExamStaffId(req: Request): Promise<string> {
   if (auth.role !== 'ADMIN') throw ApiError.forbidden('This endpoint is for the examination wing');
 
   const requested = typeof req.query.staffId === 'string' ? req.query.staffId : undefined;
-  if (!requested) throw ApiError.badRequest('staffId is required for administrator accounts');
+  if (!requested) return adminStaffId(auth.sub);
 
   const staff = await prisma.officeStaff.findUnique({
     where: { id: requested },

@@ -24,13 +24,17 @@ if (legacy.rowCount > 0) {
   await client.end();
   console.log('Old demo data found; replacing it with the neutral Resolion demo…');
   execSync('npx tsx prisma/seed.ts', { stdio: 'inherit' });
+  if (demo) execSync('npx tsx prisma/seed-scale.ts', { stdio: 'inherit' });
 } else if (rows[0].n > 0) {
   await client.end();
   console.log(`Database already has ${rows[0].n} users; nothing to prepare.`);
+  // The demo's extra colleges are added once, to a demo seeded before they existed.
+  if (demo) execSync('npx tsx prisma/seed-scale.ts', { stdio: 'inherit' });
 } else if (demo) {
   await client.end();
   console.log('Empty database and SEED_DEMO=true; loading demo data…');
   execSync('npx tsx prisma/seed.ts', { stdio: 'inherit' });
+  execSync('npx tsx prisma/seed-scale.ts', { stdio: 'inherit' });
 } else {
   // A new institute: its profile and one campus, so the IT Cell can start.
   const name = process.env.INSTITUTION_NAME?.trim() || 'New Institution';

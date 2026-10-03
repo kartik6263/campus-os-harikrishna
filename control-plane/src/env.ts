@@ -40,7 +40,7 @@ const schema = z.object({
 
   // ── local: institutes run as processes against the local Postgres ──
   LOCAL_PG_URL: z.string().default('postgresql://campus:campus@localhost:5433/postgres'),
-  LOCAL_BACKEND_DIR: z.string().default('..'),
+  LOCAL_BACKEND_DIR: z.string().default('../backend'),
   LOCAL_FIRST_PORT: z.coerce.number().default(4101),
 
   HEALTH_INTERVAL_SECONDS: z.coerce.number().default(300),

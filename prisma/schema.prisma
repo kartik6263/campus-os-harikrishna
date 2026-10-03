@@ -52,6 +52,8 @@ enum Role {
   PRINCIPAL
   REGISTRAR
   ADMIN
+  /// A supplier signed in to the vendor portal: its own bids and orders only.
+  VENDOR
 }
 
 model User {
@@ -70,12 +72,13 @@ model User {
   failedAttempts     Int       @default(0)
   mustChangePassword Boolean   @default(false)
 
-  student       Student?       @relation("StudentUser")
-  faculty       Faculty?       @relation("FacultyUser")
-  office        OfficeStaff?   @relation("OfficeUser")
-  refreshTokens RefreshToken[]
+  student        Student?        @relation("StudentUser")
+  faculty        Faculty?        @relation("FacultyUser")
+  office         OfficeStaff?    @relation("OfficeUser")
+  vendor         Vendor?         @relation("VendorUser")
+  refreshTokens  RefreshToken[]
   passwordResets PasswordReset[]
-  auditEntries  AuditEntry[]   @relation("AuditActor")
+  auditEntries   AuditEntry[]    @relation("AuditActor")
 
   // A parent signs in as themselves and reads their child's record.
   wards Student[] @relation("StudentGuardian")
@@ -939,6 +942,7 @@ model OfficeStaff {
   appealsDecided    RtiAppeal[]          @relation("AppealDecidedBy")
   certificates      CertificateRequest[] @relation("CertificateIssuedBy")
   examFormsChecked  ExamForm[]
+  governanceRaised  GovernanceRequest[]  @relation("GovernanceRaisedByStaff")
 
   @@index([collegeId])
   @@map("office_staff")
@@ -1122,9 +1126,10 @@ model ExamForm {
   scrutinisedById String?
   scrutinisedAt   DateTime?
 
-  student       Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  scrutinisedBy OfficeStaff?      @relation(fields: [scrutinisedById], references: [id])
+  student       Student            @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  scrutinisedBy OfficeStaff?       @relation(fields: [scrutinisedById], references: [id])
   subjects      ExamFormSubject[]
+  waiver        GovernanceRequest?
 
   @@unique([studentId, semester, term])
   @@index([eligibility])
@@ -1403,6 +1408,7 @@ enum GovernanceKind {
   INFRASTRUCTURE
   PROCUREMENT
   POLICY
+  EXAM_WAIVER
   OTHER
 }
 
@@ -1437,14 +1443,20 @@ model GovernanceRequest {
   decidedAt    DateTime?
   decisionNote String?
 
-  collegeId   String
-  raisedById  String
-  decidedById String?
+  collegeId       String
+  /// A faculty member, or for an office referral the clerk who raised it.
+  raisedById      String?
+  raisedByStaffId String?
+  decidedById     String?
+  /// An examination-eligibility waiver: approving it clears this form.
+  examFormId      String? @unique
 
-  college   College  @relation(fields: [collegeId], references: [id], onDelete: Cascade)
-  raisedBy  Faculty  @relation("GovernanceRaisedBy", fields: [raisedById], references: [id])
-  tenders   Tender[]
-  decidedBy Faculty? @relation("GovernanceDecidedBy", fields: [decidedById], references: [id])
+  college       College      @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+  raisedBy      Faculty?     @relation("GovernanceRaisedBy", fields: [raisedById], references: [id])
+  raisedByStaff OfficeStaff? @relation("GovernanceRaisedByStaff", fields: [raisedByStaffId], references: [id])
+  examForm      ExamForm?    @relation(fields: [examFormId], references: [id], onDelete: SetNull)
+  tenders       Tender[]
+  decidedBy     Faculty?     @relation("GovernanceDecidedBy", fields: [decidedById], references: [id])
 
   @@index([collegeId, status])
   @@index([slaDeadline])
@@ -1567,8 +1579,11 @@ model Vendor {
   empanelledUpto    DateTime?
   statusReason      String?
   collegeId         String
+  /// The supplier's own sign-in to the vendor portal, if it has one.
+  userId            String?      @unique
 
   college College         @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+  user    User?           @relation("VendorUser", fields: [userId], references: [id], onDelete: SetNull)
   bids    TenderBid[]
   orders  PurchaseOrder[]
 
@@ -1664,6 +1679,8 @@ model TenderBid {
   financialQuote    Int
   financialOpenedAt DateTime?
   status            BidStatus @default(SUBMITTED)
+  /// The technical envelope, as the vendor lodged it from the portal.
+  technicalProposal String?
 
   tender Tender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
   vendor Vendor @relation(fields: [vendorId], references: [id])
@@ -1701,6 +1718,10 @@ model PurchaseOrder {
   billPassedOn     DateTime?
   paymentDate      DateTime?
   paymentRef       String?
+  /// Set by the vendor from the portal.
+  acknowledgedAt   DateTime?
+  invoiceAmount    Int?
+  invoiceDate      DateTime?
 
   tender Tender   @relation(fields: [tenderId], references: [id], onDelete: Cascade)
   vendor Vendor   @relation(fields: [vendorId], references: [id])
@@ -1981,4 +2002,68 @@ model Intervention {
   @@index([studentId, raisedAt])
   @@index([outcome])
   @@map("interventions")
+}
+
+// ─── Phase 11 — workspace records and stored files ───────────────────────────
+
+/// A record kept for one of the departmental registers that have no table of
+/// their own — hostel, library, grievances, placement, HR, assets, alumni and
+/// the rest. Each register is a `collection`; its rows are JSON documents the
+/// screen defines. Who may read and write a collection, and whether a student
+/// sees only their own rows, is decided by the policy table in
+/// `src/modules/records/policy.ts`, never by the client.
+model WorkspaceRecord {
+  id          String   @id @default(cuid())
+  collection  String
+  /// The document's own key (a grievance number, an asset tag), unique in its collection and scope.
+  key         String
+  /// The student who owns the row (their grievances, their library loans); "" for a register-wide row.
+  studentId   String   @default("")
+  data        Json
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([collection, studentId, key])
+  @@index([collection, updatedAt])
+  @@map("workspace_records")
+}
+
+/// Marks a register (or one student's share of it) as initialised, so demo
+/// rows are written at most once and a register emptied on purpose stays empty.
+model WorkspaceCollection {
+  id            String   @id
+  initializedAt DateTime @default(now())
+
+  @@map("workspace_collections")
+}
+
+/// A file someone attached: a scanned document, a shortlist, a tender pack.
+model StoredFile {
+  id           String   @id @default(cuid())
+  name         String
+  mime         String
+  size         Int
+  bytes        Bytes
+  /// Where it was attached, e.g. "gov:assets/AST-0012".
+  context      String?
+  uploadedById String?
+  createdAt    DateTime @default(now())
+
+  @@index([context])
+  @@map("stored_files")
+}
+
+/// A one-time sign-in code, emailed. Only its hash is kept.
+model LoginCode {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String
+  expiresAt DateTime
+  attempts  Int       @default(0)
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@map("login_codes")
 }

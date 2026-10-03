@@ -6,7 +6,9 @@ import { ApiError, asyncHandler, validate } from '../../lib/http.js';
 import { requireAuth, requireRole } from '../../auth/middleware.js';
 import { requirePermission } from '../itconsole/permissions.js';
 import { ATTENDANCE_THRESHOLD } from '../student.js';
-import { overallAttendance } from '../faculty/shared.js';
+import { currentTerm, overallAttendance } from '../faculty/shared.js';
+import { hrRouter } from './hr.js';
+import { recordFor } from '../itconsole/audit.js';
 
 /**
  * Phase 5 — governance.
@@ -22,6 +24,7 @@ export const governanceRouter = Router();
 governanceRouter.use(requireAuth);
 governanceRouter.use(requireRole('PRINCIPAL', 'REGISTRAR', 'ADMIN'));
 governanceRouter.use(requirePermission('Governance'));
+governanceRouter.use(hrRouter);
 
 /** Which faculty record the principal signs as. */
 async function resolveSignatoryId(req: Request): Promise<string> {
@@ -32,10 +35,12 @@ async function resolveSignatoryId(req: Request): Promise<string> {
   });
   if (faculty) return faculty.id;
 
-  if (auth.role !== 'ADMIN') throw ApiError.forbidden('This account has no faculty record to sign as');
+  // Approvals carry a teacher's signature, so only a faculty member can give one.
+  const SIGN_AS_PRINCIPAL = 'Approvals are signed by the principal or another faculty signatory. Sign in with that account to decide this.';
+  if (auth.role !== 'ADMIN') throw ApiError.forbidden(SIGN_AS_PRINCIPAL);
 
   const requested = typeof req.query.facultyId === 'string' ? req.query.facultyId : undefined;
-  if (!requested) throw ApiError.badRequest('facultyId is required for administrator accounts');
+  if (!requested) throw ApiError.forbidden(SIGN_AS_PRINCIPAL);
 
   const exists = await prisma.faculty.findUnique({ where: { id: requested }, select: { id: true } });
   if (!exists) throw ApiError.notFound('No such faculty record');
@@ -202,7 +207,7 @@ governanceRouter.get(
   '/workload',
   asyncHandler(async (req, res) => {
     const collegeId = await resolveCollegeId(req);
-    const term = typeof req.query.term === 'string' ? req.query.term : '2024-25-ODD';
+    const term = typeof req.query.term === 'string' ? req.query.term : await currentTerm();
 
     const staff = await prisma.faculty.findMany({
       where: { collegeId },
@@ -251,6 +256,117 @@ governanceRouter.get(
   }),
 );
 
+const DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'] as const;
+
+/** Minutes since midnight on the same reading as slotHours: an afternoon "02:00" is 14:00. */
+function slotSpan(start: string, end: string): [number, number] {
+  const mins = (t: string) => { const [h = 0, m = 0] = t.split(':').map(Number); return h * 60 + m; };
+  let a = mins(start);
+  let b = mins(end);
+  if (a < 8 * 60) a += 12 * 60;
+  if (b <= a) b += 12 * 60;
+  return [a, b];
+}
+const overlaps = (x: { startTime: string; endTime: string }, y: { startTime: string; endTime: string }) => {
+  const [a1, b1] = slotSpan(x.startTime, x.endTime);
+  const [a2, b2] = slotSpan(y.startTime, y.endTime);
+  return a1 < b2 && a2 < b1;
+};
+
+// ─── GET /api/governance/workload/:facultyId/classes ──────────────────────────
+
+/** The classes a teacher holds this term, with the hours each puts on the timetable. */
+governanceRouter.get(
+  '/workload/:facultyId/classes',
+  validate('params', z.object({ facultyId: z.string().min(1) })),
+  asyncHandler(async (req, res) => {
+    const collegeId = await resolveCollegeId(req);
+    const { facultyId } = req.params as { facultyId: string };
+    const term = await currentTerm();
+    const f = await prisma.faculty.findFirst({ where: { id: facultyId, collegeId }, select: { id: true } });
+    if (!f) throw ApiError.notFound('No such faculty member');
+
+    const [assignments, slots] = await Promise.all([
+      prisma.subjectAssignment.findMany({ where: { facultyId, term }, include: { subject: { select: { code: true, name: true } } }, orderBy: { classLabel: 'asc' } }),
+      prisma.timetableSlot.findMany({ where: { facultyId, term, cancelled: false }, select: { subjectId: true, startTime: true, endTime: true } }),
+    ]);
+    res.json(assignments.map((a) => ({
+      id: a.id, code: a.subject.code, name: a.subject.name, classLabel: a.classLabel, section: a.section, kind: a.kind,
+      hours: Number(slots.filter((s) => s.subjectId === a.subjectId).reduce((n, s) => n + slotHours(s.startTime, s.endTime), 0).toFixed(1)),
+    })));
+  }),
+);
+
+// ─── POST /api/governance/workload/reassign ───────────────────────────────────
+
+/**
+ * Hands a class to another teacher: the allotment, its timetable slots and
+ * its internal-marks sheet move together, so the load, the grid and the marks
+ * stay one record. Refused if the new teacher is busy at any of its hours.
+ */
+governanceRouter.post(
+  '/workload/reassign',
+  validate('body', z.object({ assignmentId: z.string().min(1), toFacultyId: z.string().min(1), reason: z.string().trim().min(3).max(300) })),
+  asyncHandler(async (req, res) => {
+    const collegeId = await resolveCollegeId(req);
+    const { assignmentId, toFacultyId, reason } = req.body as { assignmentId: string; toFacultyId: string; reason: string };
+
+    const a = await prisma.subjectAssignment.findUnique({ where: { id: assignmentId }, include: { subject: { select: { code: true } }, faculty: { select: { id: true, name: true, collegeId: true } } } });
+    if (!a || a.faculty.collegeId !== collegeId) throw ApiError.notFound('No such class allotment');
+    if (a.facultyId === toFacultyId) throw ApiError.badRequest('That teacher already holds this class');
+    const to = await prisma.faculty.findFirst({ where: { id: toFacultyId, collegeId }, select: { id: true, name: true } });
+    if (!to) throw ApiError.notFound('No such faculty member');
+
+    const dup = await prisma.subjectAssignment.findUnique({ where: { facultyId_subjectId_term_section: { facultyId: to.id, subjectId: a.subjectId, term: a.term, section: a.section } } });
+    if (dup) throw ApiError.conflict(`${to.name} already teaches ${a.subject.code} section ${a.section} this term`);
+
+    const [moving, theirs] = await Promise.all([
+      prisma.timetableSlot.findMany({ where: { facultyId: a.facultyId, subjectId: a.subjectId, term: a.term, cancelled: false } }),
+      prisma.timetableSlot.findMany({ where: { facultyId: to.id, term: a.term, cancelled: false }, include: { subject: { select: { code: true } } } }),
+    ]);
+    const clash = moving.flatMap((m) => theirs.filter((t) => t.day === m.day && overlaps(m, t)).map((t) => `${m.day} ${m.startTime}–${m.endTime} (${t.subject.code})`));
+    if (clash.length) throw ApiError.conflict(`${to.name} is already teaching at ${clash.join(', ')}`, { clash });
+
+    await prisma.$transaction([
+      prisma.subjectAssignment.update({ where: { id: a.id }, data: { facultyId: to.id } }),
+      prisma.timetableSlot.updateMany({ where: { id: { in: moving.map((m) => m.id) } }, data: { facultyId: to.id, faculty: to.name } }),
+    ]);
+
+    await recordFor(req, { module: 'Governance', action: 'edit', target: `${a.subject.code} ${a.classLabel}`, detail: `Re-allotted from ${a.faculty.name} to ${to.name}: ${reason}` });
+    res.json({ moved: moving.length, from: a.faculty.name, to: to.name });
+  }),
+);
+
+// ─── GET /api/governance/timetable/clashes ────────────────────────────────────
+
+/** Every place the current timetable double-books a teacher or a room. */
+governanceRouter.get(
+  '/timetable/clashes',
+  asyncHandler(async (req, res) => {
+    const collegeId = await resolveCollegeId(req);
+    const term = await currentTerm();
+    const slots = await prisma.timetableSlot.findMany({
+      where: { term, cancelled: false, OR: [{ facultyUser: { collegeId } }, { facultyId: null }] },
+      include: { subject: { select: { code: true } } },
+    });
+    const clashes: Array<{ kind: 'teacher' | 'room'; who: string; day: string; a: string; b: string }> = [];
+    for (const day of DAYS) {
+      const today = slots.filter((s) => s.day === day);
+      for (let i = 0; i < today.length; i++) {
+        for (let j = i + 1; j < today.length; j++) {
+          const x = today[i]!;
+          const y = today[j]!;
+          if (!overlaps(x, y)) continue;
+          const label = (s: typeof x) => `${s.subject.code} ${s.startTime}–${s.endTime}`;
+          if (x.facultyId && x.facultyId === y.facultyId) clashes.push({ kind: 'teacher', who: x.faculty, day, a: label(x), b: label(y) });
+          if (x.room && x.room === y.room) clashes.push({ kind: 'room', who: x.room, day, a: label(x), b: label(y) });
+        }
+      }
+    }
+    res.json({ term, slots: slots.length, clashes });
+  }),
+);
+
 // ─── GET /api/governance/approvals ────────────────────────────────────────────
 
 /**
@@ -291,7 +407,10 @@ governanceRouter.get(
       }),
       prisma.governanceRequest.findMany({
         where: { collegeId, ...(pendingOnly ? { status: 'PENDING' } : {}) },
-        include: { raisedBy: { select: { id: true, name: true, designation: true, employeeId: true } } },
+        include: {
+          raisedBy: { select: { id: true, name: true, designation: true, employeeId: true } },
+          raisedByStaff: { select: { id: true, name: true, designation: true } },
+        },
         orderBy: { raisedAt: 'asc' },
       }),
     ]);
@@ -339,8 +458,10 @@ governanceRouter.get(
       ...requests.map((r) => ({
         id: r.id,
         type: r.kind.toLowerCase(),
-        typeLabel: `${r.kind[0]}${r.kind.slice(1).toLowerCase()}`,
-        from: { id: r.raisedBy.id, name: r.raisedBy.name, role: r.raisedBy.designation },
+        typeLabel: r.kind === 'EXAM_WAIVER' ? 'Exam Eligibility Waiver' : `${r.kind[0]}${r.kind.slice(1).toLowerCase()}`,
+        from: r.raisedBy
+          ? { id: r.raisedBy.id, name: r.raisedBy.name, role: r.raisedBy.designation }
+          : { id: r.raisedByStaff?.id ?? '', name: r.raisedByStaff?.name ?? 'College Office', role: r.raisedByStaff?.designation ?? 'Office' },
         subject: r.subject,
         details: r.details,
         raisedOn: r.raisedAt,
@@ -471,6 +592,32 @@ governanceRouter.post(
         decisionNote: note ?? null,
       },
     });
+
+    // An eligibility waiver acts on the form itself: approval clears it for the
+    // examination, a refusal leaves it held. Either way the student is told.
+    if (request.kind === 'EXAM_WAIVER' && request.examFormId) {
+      const form = await prisma.examForm.findUnique({ where: { id: request.examFormId } });
+      if (form) {
+        if (decision === 'APPROVE') {
+          await prisma.examForm.update({
+            where: { id: form.id },
+            data: { eligibility: 'CLEARED', remarks: `Principal's waiver ${request.requestNo}${note ? `: ${note}` : ''}`, scrutinisedAt: now },
+          });
+        }
+        await prisma.notification.create({
+          data: {
+            studentId: form.studentId,
+            kind: 'EXAM',
+            title: decision === 'APPROVE' ? 'Examination form cleared by the Principal' : 'Eligibility waiver not granted',
+            body: decision === 'APPROVE'
+              ? `Form ${form.formNo} has been cleared for Semester ${form.semester} on the Principal's waiver.`
+              : `Your request for a waiver on form ${form.formNo} was declined: ${note}`,
+            urgent: decision !== 'APPROVE',
+            href: '/(tabs)/more',
+          },
+        });
+      }
+    }
 
     res.json({ id: updated.id, type: 'request', status: updated.status, decidedAt: updated.decidedAt });
   }),

@@ -15,12 +15,15 @@
     "build": "prisma generate && tsc -p tsconfig.json",
     "start": "node scripts/start.mjs",
     "typecheck": "tsc --noEmit",
-    "test:smoke": "tsx prisma/seed.ts && node scripts/smoke.mjs"
+    "test:smoke": "tsx prisma/seed.ts && node scripts/smoke.mjs",
+    "test:vendor": "tsx prisma/seed.ts && node scripts/smoke-vendor.mjs",
+    "db:seed:demo": "tsx prisma/seed.ts && tsx prisma/seed-scale.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "bcryptjs": "^3.0.3",

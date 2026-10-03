@@ -664,3 +664,17 @@ rtiRouter.post(
     });
   }),
 );
+
+// ─── GET /api/rti/officers ────────────────────────────────────────────────────
+
+/** Staff who can be named Public Information Officer for an application. */
+rtiRouter.get(
+  '/officers',
+  asyncHandler(async (_req, res) => {
+    const staff = await prisma.officeStaff.findMany({
+      orderBy: { name: 'asc' },
+      select: { employeeId: true, name: true, designation: true },
+    });
+    res.json({ officers: staff });
+  }),
+);

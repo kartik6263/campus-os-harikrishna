@@ -8,7 +8,7 @@ import type { Provider } from './types.js';
 
 /**
  * Testing provisioner: each institute gets a database on the local Postgres
- * and its own backend process from ../ (the same code the cloud deploys), on
+ * and its own backend process from ../backend (the same code the cloud deploys), on
  * its own port. Lets the whole chain be exercised without cloud accounts.
  */
 const running = new Map<string, ChildProcess>();

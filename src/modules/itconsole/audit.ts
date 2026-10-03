@@ -124,10 +124,11 @@ export async function recordFor(
         faculty: { select: { name: true } },
         office: { select: { name: true } },
         student: { select: { name: true } },
+        vendor: { select: { name: true } },
       },
     });
     actorName =
-      user?.faculty?.name ?? user?.office?.name ?? user?.student?.name ?? user?.email ?? 'Unknown';
+      user?.faculty?.name ?? user?.office?.name ?? user?.student?.name ?? user?.vendor?.name ?? user?.email ?? 'Unknown';
   }
 
   await record({

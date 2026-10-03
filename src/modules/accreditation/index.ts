@@ -394,3 +394,39 @@ accreditationRouter.post(
     });
   }),
 );
+
+// ─── POST /api/accreditation/returns ──────────────────────────────────────────
+
+/** Adds a return to the statutory calendar: a state or regulator filing the frameworks do not list. */
+accreditationRouter.post(
+  '/returns',
+  validate(
+    'body',
+    z.object({
+      framework: z.string().min(2).max(20),
+      name: z.string().min(3).max(160),
+      dueOn: z.string().date(),
+      remarks: z.string().max(500).optional(),
+    }),
+  ),
+  asyncHandler(async (req, res) => {
+    const collegeId = await resolveCollegeId(req);
+    const body = req.body as { framework: string; name: string; dueOn: string; remarks?: string };
+    const framework = await prisma.accreditationFramework.findFirst({ where: { code: body.framework.toUpperCase() } });
+    if (!framework) throw ApiError.badRequest(`No framework ${body.framework}`);
+    const year = new Date(body.dueOn).getFullYear();
+    const prefix = `${framework.code}-${year}-`;
+    const taken = await prisma.statutoryReturn.count({ where: { code: { startsWith: prefix } } });
+    const created = await prisma.statutoryReturn.create({
+      data: {
+        code: `${prefix}${String(taken + 1).padStart(2, '0')}`,
+        name: body.name,
+        dueOn: new Date(`${body.dueOn}T00:00:00.000Z`),
+        remarks: body.remarks ?? null,
+        frameworkId: framework.id,
+        collegeId,
+      },
+    });
+    res.status(201).json({ code: created.code, name: created.name, dueOn: created.dueOn });
+  }),
+);

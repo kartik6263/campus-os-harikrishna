@@ -10,6 +10,10 @@ import { revokeAllForUser } from '../../auth/tokens.js';
 import { ACTIONS, MODULES, requirePermission } from './permissions.js';
 import { recordFor, verifyChain } from './audit.js';
 import { institutionInput } from '../institution.js';
+import { env } from '../../env.js';
+import { issueResetLink } from '../../auth/routes.js';
+import { mailConfigured } from '../../lib/mailer.js';
+import { metricsSnapshot, startedAt as metricsStartedAt } from '../../lib/metrics.js';
 
 /**
  * Phase 9 — the IT console.
@@ -685,5 +689,83 @@ itRouter.get(
     });
 
     res.json(result);
+  }),
+);
+
+// ─── GET /api/it/health ───────────────────────────────────────────────────────
+
+/**
+ * Platform health, measured: the database's round trip, which integrations
+ * this deployment actually has configured, the last hour's traffic, live
+ * sessions, accounts under sign-in pressure, and recent refusals in the
+ * audit chain. Nothing on the page is a fixed figure.
+ */
+itRouter.get(
+  '/health',
+  asyncHandler(async (_req, res) => {
+    const t0 = performance.now();
+    await prisma.$queryRaw`SELECT 1`;
+    const dbMs = Math.round((performance.now() - t0) * 10) / 10;
+    const since24h = new Date(Date.now() - 86_400_000);
+
+    const [sessions, sessions24h, failing, locked, refusals, files, records, lastAudit] = await Promise.all([
+      prisma.refreshToken.count({ where: { revokedAt: null, expiresAt: { gt: new Date() } } }),
+      prisma.refreshToken.count({ where: { createdAt: { gte: since24h } } }),
+      prisma.user.findMany({
+        where: { failedAttempts: { gt: 0 } },
+        orderBy: { failedAttempts: 'desc' },
+        take: 8,
+        select: { id: true, email: true, role: true, failedAttempts: true, lockedAt: true },
+      }),
+      prisma.user.count({ where: { lockedAt: { not: null } } }),
+      prisma.auditEntry.findMany({
+        where: { outcome: { in: ['DENIED', 'WARN'] } },
+        orderBy: { seq: 'desc' },
+        take: 8,
+        select: { seq: true, occurredAt: true, actorName: true, module: true, action: true, target: true, outcome: true },
+      }),
+      prisma.storedFile.aggregate({ _count: true, _sum: { size: true } }),
+      prisma.workspaceRecord.count(),
+      prisma.auditEntry.findFirst({ orderBy: { seq: 'desc' }, select: { occurredAt: true, seq: true } }),
+    ]);
+
+    const mem = process.memoryUsage();
+    res.json({
+      checkedAt: new Date(),
+      server: { startedAt: metricsStartedAt, uptimeSeconds: Math.round(process.uptime()), node: process.version, memoryMb: Math.round(mem.rss / 1048576), heapMb: Math.round(mem.heapUsed / 1048576) },
+      database: { ok: true, latencyMs: dbMs },
+      integrations: [
+        { name: 'Database (PostgreSQL)', configured: true, ok: true, detail: `${dbMs} ms round trip` },
+        { name: 'Email (SMTP)', configured: mailConfigured, ok: mailConfigured, detail: mailConfigured ? `via ${env.SMTP_HOST}` : 'Not configured — reset links and sign-in codes are not emailed' },
+        { name: 'AI assistant (Claude)', configured: Boolean(env.ANTHROPIC_API_KEY), ok: true, detail: env.ANTHROPIC_API_KEY ? `Model ${env.ANTHROPIC_MODEL}` : 'No key — the assistant answers from built-in reports' },
+        { name: 'Bot protection (Turnstile)', configured: Boolean(env.TURNSTILE_SECRET_KEY), ok: true, detail: env.TURNSTILE_SECRET_KEY ? 'Sign-in forms are checked' : 'Off — set TURNSTILE_SECRET_KEY to enable' },
+        { name: 'File storage', configured: true, ok: true, detail: `${files._count} file(s), ${((files._sum.size ?? 0) / 1048576).toFixed(1)} MB in the database` },
+      ],
+      traffic: metricsSnapshot(),
+      sessions: { active: sessions, startedLast24h: sessions24h },
+      accounts: { locked, failing },
+      audit: { lastSeq: lastAudit?.seq ?? 0, lastAt: lastAudit?.occurredAt ?? null, refusals },
+      registers: { records },
+    });
+  }),
+);
+
+// ─── POST /api/it/users/:id/send-reset-link ───────────────────────────────────
+
+/**
+ * Sends a person a one-time link to set their own password. With mail
+ * configured it is emailed; without, it is returned for the IT Cell to hand
+ * over, which is the only way it can reach them.
+ */
+itRouter.post(
+  '/users/:id/send-reset-link',
+  requirePermission('System Config', 'edit'),
+  asyncHandler(async (req, res) => {
+    const user = await prisma.user.findUnique({ where: { id: String(req.params.id) }, select: { id: true, email: true, isActive: true } });
+    if (!user) throw ApiError.notFound('No such account');
+    if (!user.isActive) throw ApiError.badRequest('Activate the account before sending it a link');
+    const { link, emailed, expiresInMinutes } = await issueResetLink(user.id, user.email);
+    await recordFor(req, { module: 'System Config', action: 'send-reset-link', target: user.email, detail: emailed ? 'emailed' : 'handed over', outcome: 'OK' });
+    res.json({ email: user.email, emailed, expiresInMinutes, ...(emailed ? {} : { link }) });
   }),
 );

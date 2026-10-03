@@ -82,15 +82,16 @@ studentRouter.get(
     const [sessions, attended] = await Promise.all([
       prisma.classSession.findMany({
         where: { subjectId: { in: subjectIds } },
-        select: { id: true, subjectId: true },
+        select: { id: true, subjectId: true, date: true, startTime: true, endTime: true },
       }),
       prisma.attendanceRecord.findMany({
-        where: { studentId: id, status: { in: ['PRESENT', 'LATE', 'EXCUSED'] } },
-        select: { sessionId: true },
+        where: { studentId: id },
+        select: { sessionId: true, status: true },
       }),
     ]);
 
-    const attendedSessionIds = new Set(attended.map((a) => a.sessionId));
+    const marks = new Map(attended.map((a) => [a.sessionId, a.status]));
+    const attendedSessionIds = new Set(attended.filter((a) => a.status !== 'ABSENT').map((a) => a.sessionId));
     const heldBySubject = new Map<string, number>();
     const presentBySubject = new Map<string, number>();
 
@@ -116,6 +117,20 @@ studentRouter.get(
         percent: Number(percent.toFixed(1)),
         meetsThreshold: percent >= ATTENDANCE_THRESHOLD,
         classesNeeded: classesNeeded(present, total),
+        // The last ten classes held, oldest first, with this student's mark.
+        recent: sessions
+          .filter((x) => x.subjectId === e.subjectId && x.date.getTime() <= Date.now())
+          .sort((a, b) => b.date.getTime() - a.date.getTime())
+          .slice(0, 10)
+          .reverse()
+          .map((x) => ({ sessionId: x.id, date: x.date, status: marks.get(x.id) ?? 'ABSENT' })),
+        // Classes this student is not marked present for, newest first, so a
+        // wrong mark can be disputed against the exact class.
+        missed: sessions
+          .filter((x) => x.subjectId === e.subjectId && !attendedSessionIds.has(x.id) && x.date.getTime() <= Date.now())
+          .sort((a, b) => b.date.getTime() - a.date.getTime())
+          .slice(0, 30)
+          .map((x) => ({ sessionId: x.id, date: x.date, time: `${x.startTime}–${x.endTime}` })),
       };
     });
 
@@ -131,6 +146,34 @@ studentRouter.get(
       },
       subjects,
     });
+  }),
+);
+
+// ─── GET /api/student/materials ───────────────────────────────────────────────
+
+/** What the student's teachers have shared for the subjects they take, by unit. */
+studentRouter.get(
+  '/materials',
+  asyncHandler(async (req, res) => {
+    const id = await resolveStudentId(req);
+    const enrolments = await prisma.enrolment.findMany({
+      where: { studentId: id },
+      include: { subject: { select: { id: true, code: true, name: true } } },
+      orderBy: { subject: { code: 'asc' } },
+    });
+    const materials = await prisma.studyMaterial.findMany({
+      where: { subjectId: { in: enrolments.map((e) => e.subjectId) }, visibleToStudents: true },
+      include: { faculty: { select: { name: true } } },
+      orderBy: [{ unit: 'asc' }, { uploadedAt: 'desc' }],
+    });
+    res.json(enrolments.map((e) => ({
+      code: e.subject.code,
+      name: e.subject.name,
+      faculty: e.faculty,
+      materials: materials.filter((m) => m.subjectId === e.subjectId).map((m) => ({
+        id: m.id, unit: m.unit, unitTitle: m.unitTitle, filename: m.filename, url: m.url, type: m.type, size: m.sizeLabel, uploadedAt: m.uploadedAt, by: m.faculty.name,
+      })),
+    })));
   }),
 );
 

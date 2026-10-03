@@ -25,6 +25,11 @@ async function main() {
 
   // Wipe demo data in dependency order.
   await prisma.$transaction([
+    // Phase 11: workspace registers, attachments and sign-in codes stand alone.
+    prisma.workspaceRecord.deleteMany(),
+    prisma.workspaceCollection.deleteMany(),
+    prisma.storedFile.deleteMany(),
+    prisma.loginCode.deleteMany(),
     // Phase 10 first: these hang off students and faculty.
     prisma.riskFactorSnapshot.deleteMany(),
     prisma.riskAssessment.deleteMany(),
@@ -1289,10 +1294,17 @@ async function main() {
     { code: 'VND/007', name: 'River Electricals', gstin: '23AADCE6789K1ZW', pan: 'AADCE6789K', cats: ['Electrical'], contact: 'Kailash Rathore', mobile: '93005 11223', email: 'river.elec@gmail.com', status: 'EMPANELLED' as const, verified: true, upto: -30 },
   ];
 
+  // Two suppliers sign in to the vendor portal: one empanelled, one still waiting.
+  const VENDOR_LOGINS = new Set(['VND/001', 'VND/005']);
+
   const vendorByCode = new Map<string, string>();
   for (const v of VENDORS) {
+    const login = VENDOR_LOGINS.has(v.code)
+      ? await prisma.user.create({ data: { email: v.email, passwordHash, role: 'VENDOR' } })
+      : null;
     const created = await prisma.vendor.create({
       data: {
+        userId: login?.id ?? null,
         code: v.code,
         name: v.name,
         gstin: v.gstin,

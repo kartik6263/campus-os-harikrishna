@@ -15,7 +15,7 @@ export const examFormsRouter = Router();
  * sees, and the dues from the same ledger the counter writes to — scrutiny is
  * a reading of the record, never a second copy of it.
  */
-async function scrutinise(formIds: string[]) {
+export async function scrutinise(formIds: string[]) {
   const forms = await prisma.examForm.findMany({
     where: { id: { in: formIds } },
     include: {
@@ -99,6 +99,7 @@ const INCLUDE = {
   },
   subjects: { include: { subject: { select: { code: true, name: true } } } },
   scrutinisedBy: { select: { name: true } },
+  waiver: { select: { requestNo: true, status: true, decisionNote: true } },
 };
 
 // ─── GET /api/office/exam-forms ───────────────────────────────────────────────
@@ -150,6 +151,7 @@ examFormsRouter.get(
         remarks: f.remarks,
         scrutinisedBy: f.scrutinisedBy?.name ?? null,
         scrutinisedAt: f.scrutinisedAt,
+        waiver: f.waiver ? { requestNo: f.waiver.requestNo, status: f.waiver.status, note: f.waiver.decisionNote } : null,
         subjects: c.subjects,
       };
     });
@@ -230,7 +232,7 @@ examFormsRouter.post(
             ? `Form ${form.formNo} has been cleared for Semester ${form.semester}.`
             : (remarks ?? 'Your examination form needs attention. Contact the college office.'),
         urgent: decision !== 'CLEAR',
-        href: '/exam-form',
+        href: '/(tabs)/more',
       },
     });
 
@@ -242,5 +244,57 @@ examFormsRouter.post(
       scrutinisedAt: updated.scrutinisedAt,
       computedEligibility: computed.computed,
     });
+  }),
+);
+
+// ─── POST /api/office/exam-forms/:id/refer ────────────────────────────────────
+
+/**
+ * Refers a form the clerk cannot clear — an ex-student, a long medical absence —
+ * to the Principal as an eligibility waiver. It lands in the Principal's
+ * approval inbox; approving it there clears the form.
+ */
+examFormsRouter.post(
+  '/exam-forms/:id/refer',
+  validate('params', z.object({ id: z.string().min(1) })),
+  validate('body', z.object({ reason: z.string().trim().min(10).max(2000) })),
+  asyncHandler(async (req, res) => {
+    const staffId = await resolveStaffId(req);
+    const { id } = req.params as { id: string };
+    const { reason } = req.body as { reason: string };
+
+    const form = await prisma.examForm.findUnique({
+      where: { id },
+      include: { student: { select: { name: true, rollNo: true, collegeId: true } }, waiver: true },
+    });
+    if (!form) throw ApiError.notFound('No such examination form');
+    if (form.eligibility === 'CLEARED') throw ApiError.conflict('This form is already cleared');
+    if (form.waiver?.status === 'PENDING') throw ApiError.conflict(`Already with the Principal as ${form.waiver.requestNo}`);
+
+    const computed = (await scrutinise([id])).get(id)!;
+    const year = new Date().getFullYear();
+    const prefix = `GR/${year}/`;
+    const existing = await prisma.governanceRequest.findMany({ where: { requestNo: { startsWith: prefix } }, select: { requestNo: true } });
+    const highest = existing.reduce((max, r) => { const t = Number(r.requestNo.slice(prefix.length)); return Number.isFinite(t) && t > max ? t : max; }, 0);
+    const why = computed.computed === 'FEE_DUE' ? `₹${computed.due} outstanding` : computed.computed === 'SHORTAGE' ? `attendance short in ${computed.shortfalls} subject(s)` : 'eligible on the record';
+
+    // A refused waiver can be referred again with a fuller reason; the old link is released.
+    if (form.waiver) await prisma.governanceRequest.update({ where: { id: form.waiver.id }, data: { examFormId: null } });
+    const created = await prisma.governanceRequest.create({
+      data: {
+        requestNo: `${prefix}${String(highest + 1).padStart(4, '0')}`,
+        kind: 'EXAM_WAIVER',
+        subject: `Exam eligibility waiver — ${form.student.name} (${form.student.rollNo}), form ${form.formNo}`,
+        details: `Record: ${why}. Office's reason: ${reason}`,
+        priority: 'HIGH',
+        slaDeadline: new Date(Date.now() + 3 * 86_400_000),
+        collegeId: form.student.collegeId,
+        raisedByStaffId: staffId,
+        examFormId: form.id,
+      },
+    });
+
+    await prisma.examForm.update({ where: { id }, data: { remarks: `Referred to the Principal (${created.requestNo}): ${reason}`.slice(0, 500), scrutinisedById: staffId, scrutinisedAt: new Date() } });
+    res.status(201).json({ requestNo: created.requestNo, status: created.status });
   }),
 );

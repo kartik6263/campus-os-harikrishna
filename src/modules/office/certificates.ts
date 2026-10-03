@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { certificateSignature } from '../verify.js';
 import { z } from 'zod';
 import { prisma } from '../../db.js';
 import { ApiError, asyncHandler, validate } from '../../lib/http.js';
@@ -66,6 +67,10 @@ function present(c: {
     issuedBy: c.issuedBy?.name ?? null,
     issuedAt: c.issuedAt,
     rejectReason: c.rejectReason,
+    // Printed in the certificate's QR code; the public verifier checks it.
+    signature: c.issuedAt && (c.stage === 'READY' || c.stage === 'DISPATCHED')
+      ? certificateSignature({ requestNo: c.requestNo, enrolmentNo: c.student.enrolmentNo, type: c.type, issuedAt: c.issuedAt })
+      : null,
   };
 }
 
@@ -199,7 +204,7 @@ certificatesRouter.post(
               ? (reason ?? '')
               : `Request ${request.requestNo} — ${request.type}.`,
           urgent: stage === 'REJECTED',
-          href: '/certificates',
+          href: '/(tabs)/more',
         },
       }),
     ]);

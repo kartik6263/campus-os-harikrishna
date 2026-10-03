@@ -266,9 +266,11 @@ section('Authorisation');
   check('parent can log in', parent.status === 200 && parent.body?.user?.role === 'PARENT');
 
   const parentToken = parent.body?.accessToken;
+  const own = await call('/api/student/profile', { token: parentToken });
   check(
-    'parent without studentId gets a 400',
-    (await call('/api/student/profile', { token: parentToken })).status === 400,
+    'parent without studentId reads their own ward',
+    own.status === 200 && own.body?.name === 'Priya Sharma',
+    `status ${own.status}`,
   );
 
   const studentId = login.body?.user?.student?.id;
@@ -915,6 +917,8 @@ section('Faculty leave');
 
   // The pending medical leave runs from five days out; aim inside it.
   const inWindow = new Date(Date.now() + 6 * 86_400_000).toISOString().slice(0, 10);
+  // Clear of the seed's leave (5–7 days ahead), whatever today is.
+  const dutyDay = (n) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
   check(
     'leave overlapping a live application is refused',
     (
@@ -931,7 +935,7 @@ section('Faculty leave');
       await call('/api/faculty/leaves', {
         method: 'POST',
         token: facToken,
-        body: { kind: 'CASUAL', from: '2026-10-12', to: '2026-10-10', reason: 'Dates the wrong way round.' },
+        body: { kind: 'CASUAL', from: dutyDay(32), to: dutyDay(30), reason: 'Dates the wrong way round.' },
       })
     ).status === 400,
   );
@@ -939,7 +943,7 @@ section('Faculty leave');
   const applied = await call('/api/faculty/leaves', {
     method: 'POST',
     token: facToken,
-    body: { kind: 'DUTY', from: '2026-10-10', to: '2026-10-12', reason: 'University examination duty at the university campus.' },
+    body: { kind: 'DUTY', from: dutyDay(30), to: dutyDay(32), reason: 'University examination duty at the university campus.' },
   });
   check('leave can be applied for', applied.status === 201, `status ${applied.status}`);
   check('the span is inclusive', applied.body?.days === 3, `got ${applied.body?.days}`);

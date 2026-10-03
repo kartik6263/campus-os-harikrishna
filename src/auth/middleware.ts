@@ -14,6 +14,12 @@ declare global {
   }
 }
 
+/** The only API paths a VENDOR token may reach. */
+const VENDOR_REACHABLE = ['/api/vendor', '/api/auth', '/api/institution'];
+
+/** Roles that may name any student by id: the campus's own staff. */
+const STAFF_ROLES: Role[] = ['FACULTY', 'OFFICE', 'PRINCIPAL', 'REGISTRAR', 'ADMIN'];
+
 /** Rejects the request unless a valid, unexpired access token is present. */
 export function requireAuth(req: Request, _res: Response, next: NextFunction) {
   const header = req.headers.authorization;
@@ -27,6 +33,13 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction) {
     // On a shared pool, a token only works at the institute that issued it.
     if (env.POOL_MODE && claims.tid !== currentTenant()?.slug) {
       next(ApiError.unauthorized('This sign-in belongs to a different institute'));
+      return;
+    }
+    // A supplier is an outsider. Many campus routes only ask "signed in?" and
+    // then trust the role to be a student, parent or staff member, so a vendor
+    // token is refused everywhere except the routes written for it.
+    if (claims.role === 'VENDOR' && !VENDOR_REACHABLE.some((p) => req.originalUrl.startsWith(p))) {
+      next(ApiError.forbidden('Vendor accounts can use the vendor portal only'));
       return;
     }
     req.auth = claims;
@@ -135,6 +148,17 @@ export async function resolveStudentId(req: Request): Promise<string> {
     (req.params.studentId as string | undefined) ??
     (typeof req.query.studentId === 'string' ? req.query.studentId : undefined);
 
+  // A parent who names no student means their own ward (the first, if several).
+  if (!requested && auth.role === 'PARENT') {
+    const ward = await prisma.student.findFirst({
+      where: { guardianId: auth.sub },
+      orderBy: { enrolmentNo: 'asc' },
+      select: { id: true },
+    });
+    if (!ward) throw ApiError.forbidden('No student is linked to this parent account');
+    return ward.id;
+  }
+
   if (!requested) {
     throw ApiError.badRequest('studentId is required for non-student accounts');
   }
@@ -148,5 +172,6 @@ export async function resolveStudentId(req: Request): Promise<string> {
     return ward.id;
   }
 
+  if (!STAFF_ROLES.includes(auth.role)) throw ApiError.forbidden('This account cannot read student records');
   return requested;
 }

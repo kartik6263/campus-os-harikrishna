@@ -49,7 +49,7 @@ profileRouter.get(
   '/profile',
   asyncHandler(async (req, res) => {
     const facultyId = await resolveFacultyId(req);
-    const term = requestedTerm(req);
+    const term = await requestedTerm(req);
 
     const faculty = await prisma.faculty.findUnique({
       where: { id: facultyId },
@@ -102,7 +102,7 @@ profileRouter.get(
   '/subjects',
   asyncHandler(async (req, res) => {
     const facultyId = await resolveFacultyId(req);
-    const term = requestedTerm(req);
+    const term = await requestedTerm(req);
 
     const assignments = await prisma.subjectAssignment.findMany({
       where: { facultyId, term },
@@ -145,7 +145,7 @@ profileRouter.get(
   '/timetable',
   asyncHandler(async (req, res) => {
     const facultyId = await resolveFacultyId(req);
-    const term = requestedTerm(req);
+    const term = await requestedTerm(req);
 
     const slots = await prisma.timetableSlot.findMany({
       where: { facultyId, term },
@@ -202,7 +202,7 @@ profileRouter.get(
   validate('query', z.object({ date: z.string().date().optional(), term: z.string().optional() })),
   asyncHandler(async (req, res) => {
     const facultyId = await resolveFacultyId(req);
-    const term = requestedTerm(req);
+    const term = await requestedTerm(req);
 
     const dateParam = typeof req.query.date === 'string' ? req.query.date : undefined;
     const date = dayStart(dateParam ? new Date(`${dateParam}T00:00:00.000Z`) : new Date());

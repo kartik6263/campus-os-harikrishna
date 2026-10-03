@@ -78,7 +78,7 @@ npm run dev        # → http://localhost:4500
 ```
 
 `PROVISIONER=local` creates each institute's database on the local Postgres
-and runs its backend (`..`) as a process on ports from 4101. Point the web app
+and runs its backend (`../backend`) as a process on ports from 4101. Point the web app
 at it with `VITE_CONTROL_PLANE_URL=http://localhost:4500` and open
 `http://localhost:5173/?tenant=<address>`.
 

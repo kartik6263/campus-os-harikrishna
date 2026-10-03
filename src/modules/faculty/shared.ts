@@ -1,5 +1,5 @@
 import type { Request } from 'express';
-import { prisma } from '../../db.js';
+import { currentTenant, prisma } from '../../db.js';
 import { ApiError } from '../../lib/http.js';
 import { ATTENDANCE_THRESHOLD } from '../student.js';
 
@@ -13,8 +13,21 @@ export const ATTENDANCE_LOCK_HOURS = 24;
 /** The statuses that count towards a student's percentage. */
 export const PRESENT_STATUSES = ['PRESENT', 'LATE', 'EXCUSED'] as const;
 
-/** The term the current academic session runs under. */
-export const CURRENT_TERM = '2024-25-ODD';
+/**
+ * The term the current academic session runs under: the latest term anyone
+ * is enrolled in, so a new term takes over as soon as its enrolments exist —
+ * no code change at the start of a semester. Cached briefly per institute.
+ */
+const termCache = new Map<string, { term: string; at: number }>();
+export async function currentTerm(): Promise<string> {
+  const key = currentTenant()?.slug ?? 'default';
+  const hit = termCache.get(key);
+  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.term;
+  const latest = await prisma.enrolment.findFirst({ orderBy: { term: 'desc' }, select: { term: true } });
+  const term = latest?.term ?? `${new Date().getFullYear()}-${String((new Date().getFullYear() + 1) % 100).padStart(2, '0')}-ODD`;
+  termCache.set(key, { term, at: Date.now() });
+  return term;
+}
 
 export { ATTENDANCE_THRESHOLD };
 
@@ -167,7 +180,7 @@ export async function overallAttendance(studentIds: string[]) {
 }
 
 /** The term a request asks about, defaulting to the live academic session. */
-export function requestedTerm(req: Request): string {
+export async function requestedTerm(req: Request): Promise<string> {
   const term = req.query.term;
-  return typeof term === 'string' && term.length > 0 ? term : CURRENT_TERM;
+  return typeof term === 'string' && term.length > 0 ? term : currentTerm();
 }
