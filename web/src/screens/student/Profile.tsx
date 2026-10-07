@@ -3,6 +3,8 @@ import { Button, Modal, InlineAlert, SkeletonRow, toast } from '../../components
 import { useResults, useStudentRecord } from '../../lib/queries';
 import { useCollection, useFiles } from '../../lib/records';
 import { FIELD_KEY, NEEDS_PROOF, correctionNo, type CorrectionField, type RecordCorrection } from '../../lib/corrections';
+import IdentityVerification from '../../components/IdentityVerification';
+import { useMyVerification } from '../../lib/verification';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 interface Props { onNavigate: (m: any) => void }
@@ -35,6 +37,8 @@ export default function ProfileModule({ onNavigate: _ }: Props) {
   const results = useResults();
   const [draftId, setDraftId] = useState(correctionNo);
   const proof = useFiles(`student:record-correction/${draftId}`);
+  const verification = useMyVerification();
+  const identity = verification.data?.identityStatus;
 
   if (isPending || !STUDENT) {
     return (
@@ -83,23 +87,23 @@ export default function ProfileModule({ onNavigate: _ }: Props) {
             className="w-16 h-16 rounded-full flex items-center justify-center text-[#16264A] font-bold text-[20px] shrink-0"
             style={{ background: '#E0952A' }}
           >
-            PS
+            {STUDENT.name.split(/s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase()}
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-[18px] font-bold text-white leading-tight">{STUDENT.name}</div>
             <div className="font-mono text-[12px] text-[#94A3B8] mt-0.5">{STUDENT.id}</div>
             <div className="text-[12px] text-[#94A3B8] mt-0.5 truncate">{STUDENT.college}</div>
             <div className="mt-2">
-              {STUDENT.digilockerLinked ? (
+              {identity === 'VERIFIED' ? (
                 <span className="inline-flex items-center gap-1 text-[11px] border border-[#0E7A5F] text-[#6EE7B7] px-2 py-0.5 rounded-[2px]">
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
-                  DigiLocker Linked
+                  Verified profile{verification.data?.identitySource === 'DIGILOCKER' ? ' · DigiLocker' : ''}
                 </span>
-              ) : (
+              ) : identity ? (
                 <span className="inline-flex items-center gap-1 text-[11px] border border-[#8A6D1F] text-[#FDE68A] px-2 py-0.5 rounded-[2px]">
-                  DigiLocker Not Linked
+                  {identity === 'PENDING_REVIEW' ? 'Verification with the office' : identity === 'REJECTED' ? 'Verification rejected — see below' : 'Profile not verified'}
                 </span>
-              )}
+              ) : null}
             </div>
           </div>
         </div>
@@ -158,7 +162,7 @@ export default function ProfileModule({ onNavigate: _ }: Props) {
 
       {/* APAAR & ABC */}
       <div className="mt-2">
-        <SectionLabel label="APAAR & Academic Bank of Credits (ABC)" />
+        <SectionLabel label="APAAR & Academic Bank of Credits (ABC)" action={<a href="#verification" className="text-[12px] text-[#E0952A] font-medium">ABC ID →</a>} />
         <div className="bg-white">
           {/* APAAR */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-[#D3D8E0]">
@@ -169,6 +173,7 @@ export default function ProfileModule({ onNavigate: _ }: Props) {
             <button
               className="min-h-[44px] min-w-[44px] flex items-center justify-center text-[#5A6577] hover:text-[#16264A] cursor-pointer"
               onClick={() => copyToClipboard(STUDENT.apaarId, 'APAAR ID')}
+              disabled={STUDENT.apaarId === '—'}
               aria-label="Copy APAAR ID"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -176,23 +181,6 @@ export default function ProfileModule({ onNavigate: _ }: Props) {
               </svg>
             </button>
           </div>
-          {/* ABC ID */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-[#D3D8E0]">
-            <div>
-              <div className="text-[12px] text-[#5A6577]">ABC ID</div>
-              <div className="font-mono text-[13px] text-[#16264A] font-medium mt-0.5">{STUDENT.abcId}</div>
-            </div>
-            <button
-              className="min-h-[44px] min-w-[44px] flex items-center justify-center text-[#5A6577] hover:text-[#16264A] cursor-pointer"
-              onClick={() => copyToClipboard(STUDENT.abcId, 'ABC ID')}
-              aria-label="Copy ABC ID"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
-              </svg>
-            </button>
-          </div>
-
           {/* Credits bar */}
           <div className="px-4 py-3 border-b border-[#D3D8E0]">
             <div className="flex items-center justify-between mb-2">
@@ -246,30 +234,10 @@ export default function ProfileModule({ onNavigate: _ }: Props) {
         </div>
       </div>
 
-      {/* DigiLocker */}
-      <div className="mt-2">
-        <SectionLabel label="DigiLocker" />
-        <div className="bg-white">
-          <div className="flex items-center gap-3 px-4 py-3 border-b border-[#D3D8E0]">
-            <span className="w-5 h-5 rounded-full bg-[#D1FAE5] flex items-center justify-center shrink-0">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#0E7A5F" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
-            </span>
-            <div>
-              <div className={`text-[13px] font-semibold ${STUDENT.digilockerLinked ? 'text-[#0E7A5F]' : 'text-[#9A5B00]'}`}>{STUDENT.digilockerLinked ? 'Linked' : 'Not linked yet'}</div>
-              <div className="text-[12px] text-[#5A6577]">{STUDENT.digilockerLinked ? 'Certificates issued by the institution are pushed to your DigiLocker' : 'Link your DigiLocker account to receive certificates there'}</div>
-            </div>
-          </div>
-          <div className="px-4 py-3">
-            <a
-              href="https://www.digilocker.gov.in"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-[13px] text-[#E0952A] font-medium min-h-[44px]"
-            >
-              View on DigiLocker ↗
-            </a>
-          </div>
-        </div>
+      {/* Identity & ABC verification */}
+      <div className="mt-2" id="verification">
+        <SectionLabel label="Identity & ABC ID verification" />
+        <IdentityVerification />
       </div>
 
       {/* Edit Request Modal */}

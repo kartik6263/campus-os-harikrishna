@@ -4,7 +4,7 @@ import type { Weekday } from '@prisma/client';
 import { prisma } from '../../db.js';
 import { ApiError, asyncHandler, validate } from '../../lib/http.js';
 import { resolveFacultyId } from '../../auth/middleware.js';
-import { attendanceFor, isLocked, lockedAt, requestedTerm } from './shared.js';
+import { attendanceFor, isLocked, istToday, lockedAt, requestedTerm } from './shared.js';
 
 export const profileRouter = Router();
 
@@ -205,7 +205,7 @@ profileRouter.get(
     const term = await requestedTerm(req);
 
     const dateParam = typeof req.query.date === 'string' ? req.query.date : undefined;
-    const date = dayStart(dateParam ? new Date(`${dateParam}T00:00:00.000Z`) : new Date());
+    const date = dayStart(dateParam ? new Date(`${dateParam}T00:00:00.000Z`) : istToday());
     const day = weekdayOf(date);
 
     if (!day) {
@@ -313,7 +313,7 @@ profileRouter.post(
     }
     if (slot.cancelled) throw ApiError.badRequest('That class is cancelled');
 
-    const date = dayStart(dateParam ? new Date(`${dateParam}T00:00:00.000Z`) : new Date());
+    const date = dayStart(dateParam ? new Date(`${dateParam}T00:00:00.000Z`) : istToday());
 
     if (weekdayOf(date) !== slot.day) {
       throw ApiError.badRequest(`That slot runs on ${slot.day}, not the date supplied`);

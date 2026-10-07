@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { Button, Modal, InlineAlert, Toggle, Tabs, toast } from '../../components/ui';
-import { useCancelClass, useFacultyRecord, useFacultyTimetableGrid, useMySubjects } from '../../lib/facultyqueries';
+import { useFacultyProfile, useCancelClass, useFacultyRecord, useFacultyTimetableGrid, useMySubjects } from '../../lib/facultyqueries';
 
 interface Props {
   onNavigate: (s: any) => void;
@@ -27,6 +27,7 @@ interface CancelSlot {
 }
 
 export default function FacultyTimetable({ onNavigate, onModule }: Props) {
+  const termLabel = useFacultyProfile().data?.term ?? '…';
   const { data: faculty } = useFacultyRecord();
   const { data: timetable } = useFacultyTimetableGrid();
   const { data: mySubjects } = useMySubjects();
@@ -135,7 +136,7 @@ export default function FacultyTimetable({ onNavigate, onModule }: Props) {
         <div className="flex items-center justify-between mb-3">
           <div>
             <h2 className="text-[16px] font-semibold text-[#16264A]">My Timetable</h2>
-            <p className="text-[12px] text-[#5A6577]">Academic Year 2024–25 · Odd Semester</p>
+            <p className="text-[12px] text-[#5A6577]">Term {termLabel}</p>
           </div>
           <div className={`text-right`}>
             <p className="text-[12px] text-[#5A6577]">Weekly load</p>

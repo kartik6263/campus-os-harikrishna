@@ -255,20 +255,20 @@ async function main() {
     ['MON', '09:00', '10:00', 'BCA501', 'Dr. R.K. Mishra', 'CS-201'],
     ['MON', '10:00', '11:00', 'BCA502', 'Prof. Sunita Yadav', 'CS-203'],
     ['MON', '11:15', '12:15', 'BCA503', 'Dr. Anil Sharma', 'CS-101', true, 'Faculty on duty leave', '08:42 AM'],
-    ['MON', '01:00', '02:00', 'BCA504', 'Prof. M.L. Gupta', 'CS-202'],
+    ['MON', '13:00', '14:00', 'BCA504', 'Prof. M.L. Gupta', 'CS-202'],
     ['TUE', '09:00', '10:00', 'BCA502', 'Prof. Sunita Yadav', 'CS-203'],
     ['TUE', '10:00', '12:00', 'BCA505', 'Ms. Kavita Jain', 'Lab-3'],
-    ['TUE', '01:00', '03:00', 'BCA506', 'Dr. R.K. Mishra', 'Lab-2'],
+    ['TUE', '13:00', '15:00', 'BCA506', 'Dr. R.K. Mishra', 'Lab-2'],
     ['WED', '09:00', '10:00', 'BCA504', 'Prof. M.L. Gupta', 'CS-202'],
     ['WED', '10:00', '11:00', 'BCA501', 'Dr. R.K. Mishra', 'CS-201'],
     ['WED', '11:15', '12:15', 'BCA503', 'Dr. Anil Sharma', 'CS-101'],
     ['THU', '09:00', '10:00', 'BCA501', 'Dr. R.K. Mishra', 'CS-201'],
     ['THU', '10:00', '11:00', 'BCA502', 'Prof. Sunita Yadav', 'CS-203'],
-    ['THU', '11:15', '01:15', 'BCA505', 'Ms. Kavita Jain', 'Lab-3'],
+    ['THU', '11:15', '13:15', 'BCA505', 'Ms. Kavita Jain', 'Lab-3'],
     ['FRI', '09:00', '10:00', 'BCA503', 'Dr. Anil Sharma', 'CS-101'],
     ['FRI', '10:00', '11:00', 'BCA504', 'Prof. M.L. Gupta', 'CS-202'],
     ['FRI', '11:15', '12:15', 'BCA502', 'Prof. Sunita Yadav', 'CS-203'],
-    ['FRI', '01:00', '02:00', 'BCA501', 'Dr. R.K. Mishra', 'CS-201'],
+    ['FRI', '13:00', '14:00', 'BCA501', 'Dr. R.K. Mishra', 'CS-201'],
     ['SAT', '09:00', '11:00', 'BCA506', 'Dr. R.K. Mishra', 'Lab-2'],
     ['SAT', '11:15', '12:15', 'BCA503', 'Dr. Anil Sharma', 'CS-101'],
   ];
@@ -1651,8 +1651,8 @@ async function main() {
   const todaySession = await prisma.classSession.create({
     data: {
       subjectId: seSubject,
-      // Midnight UTC, the same key the faculty day view looks sessions up by.
-      date: new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate())),
+      // Today on the Indian calendar, the key the faculty day view looks sessions up by.
+      date: (() => { const n = new Date(Date.now() + 330 * 60_000); return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate())); })(),
       startTime: '09:00',
       endTime: '10:00',
       room: 'CS-201',

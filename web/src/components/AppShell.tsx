@@ -6,6 +6,7 @@ import { useAuth, displayName, ROLE_TITLES } from '../lib/auth';
 import { Avatar, Modal } from './ui';
 import type { Screen } from '../lib/data';
 import { workspacesFor } from '../lib/workspaces';
+import { VerificationDialog, VerificationMenuItem } from './IdentityVerification';
 import { PRODUCT_NAME, useInstitution } from '../lib/institution';
 
 interface AppShellProps {
@@ -39,6 +40,7 @@ export default function AppShell({ children, onNavigate, current, title, breadcr
   const [profileOpen, setProfileOpen] = useState(false);
   const [seenAt, setSeenAt] = useState(() => Number(localStorageGet('resolion.activitySeen') ?? 0));
   const [about, setAbout] = useState<null | 'accessibility' | 'help'>(null);
+  const [verifyOpen, setVerifyOpen] = useState(false);
 
   const inst = useInstitution();
   const { user, signOut } = useAuth();
@@ -126,6 +128,7 @@ export default function AppShell({ children, onNavigate, current, title, breadcr
                 <p className="text-[11px] text-[#5A6577] truncate">{user?.email}</p>
               </div>
               <div className="py-1">
+                <VerificationMenuItem onClick={() => { setProfileOpen(false); setVerifyOpen(true); }} />
                 <button onClick={() => { setProfileOpen(false); onNavigate('it-console'); }} className="w-full text-left px-4 py-2.5 text-[13px] text-[#16264A] hover:bg-[#EDEFF3] cursor-pointer">{t('Account & security (IT Cell)', 'खाता एवं सुरक्षा (आईटी सेल)')}</button>
                 <button onClick={() => { setProfileOpen(false); setAbout('help'); }} className="w-full text-left px-4 py-2.5 text-[13px] text-[#16264A] hover:bg-[#EDEFF3] cursor-pointer">{t('Help & shortcuts', 'सहायता एवं शॉर्टकट')}</button>
                 <div className="border-t border-[#D3D8E0] mt-1 pt-1">
@@ -136,6 +139,7 @@ export default function AppShell({ children, onNavigate, current, title, breadcr
           )}
         </div>
       </header>
+      <VerificationDialog open={verifyOpen} onClose={() => setVerifyOpen(false)} />
 
       <div className="flex flex-1 min-h-0">
         <aside className={`${railOpen ? 'w-60' : 'w-0 overflow-hidden'} bg-white border-r border-[#D3D8E0] transition-all duration-200 flex flex-col shrink-0 z-20`}>

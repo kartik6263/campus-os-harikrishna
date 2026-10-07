@@ -17,6 +17,7 @@ import {
   useTimetable,
 } from '../../lib/queries';
 import { StatusPill } from '../../components/ui';
+import { STATUS_LABEL, useMyVerification } from '../../lib/verification';
 
 interface Props {
   onNavigate: (m: Module) => void;
@@ -455,7 +456,9 @@ function PendingActions({ onNavigate }: PendingActionsProps) {
 
 function IdentityStrip() {
   const { data: STUDENT } = useStudentRecord();
+  const verification = useMyVerification();
   if (!STUDENT) return null;
+  const status = verification.data?.identityStatus;
   return (
     <div className="bg-white border-b border-[#D3D8E0] px-4 py-3 flex items-center gap-3">
       {/* Initials avatar */}
@@ -480,7 +483,11 @@ function IdentityStrip() {
         >
           {STUDENT.id}
         </p>
-        <p className="text-[11px] text-[#0E7A5F] mt-1 font-medium">DigiLocker linked</p>
+        {status && (
+          <p className={`text-[11px] mt-1 font-medium ${status === 'VERIFIED' ? 'text-[#0E7A5F]' : 'text-[#8A6D1F]'}`}>
+            {status === 'VERIFIED' ? `✓ Verified${verification.data?.identitySource === 'DIGILOCKER' ? ' · DigiLocker' : ''}` : STATUS_LABEL[status]}
+          </p>
+        )}
       </div>
     </div>
   );

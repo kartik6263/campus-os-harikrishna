@@ -12,11 +12,12 @@ import ParentResults from './parent/ParentResults';
 import ParentAnnouncements from './parent/ParentAnnouncements';
 import ParentGatePass from './parent/ParentGatePass';
 import ParentMessaging from './parent/ParentMessaging';
+import ParentVerification from './parent/ParentVerification';
 import { inst } from '../lib/institution';
 
 interface Props { onNavigate: (s: Screen) => void }
 
-type Module = 'dashboard' | 'attendance' | 'fee' | 'results' | 'announcements' | 'gate-pass' | 'messaging' | 'more';
+type Module = 'dashboard' | 'attendance' | 'fee' | 'results' | 'announcements' | 'gate-pass' | 'messaging' | 'verification' | 'more';
 
 const BOTTOM_NAV: Array<{ id: Module; labelHi: string; label: string; icon: string }> = [
   { id: 'dashboard', label: 'Home', labelHi: 'होम', icon: '🏠' },
@@ -30,6 +31,7 @@ const MORE_ITEMS: Array<{ id: Module; label: string; labelHi: string; icon: stri
   { id: 'announcements', label: 'Announcements', labelHi: 'सूचनाएं', icon: '📢' },
   { id: 'gate-pass', label: 'Leave & Gate Pass', labelHi: 'अवकाश', icon: '🚪' },
   { id: 'messaging', label: 'Message Teacher', labelHi: 'अध्यापक से संपर्क', icon: '💬' },
+  { id: 'verification', label: 'Verification (DigiLocker)', labelHi: 'सत्यापन (डिजीलॉकर)', icon: '🔐' },
 ];
 
 // Compact assistant for the parent portal: answers about the ward only.
@@ -190,6 +192,7 @@ export default function ParentPortal({ onNavigate }: Props) {
         {module === 'announcements' && <ParentAnnouncements lang={lang} />}
         {module === 'gate-pass' && <ParentGatePass lang={lang} />}
         {module === 'messaging' && <ParentMessaging lang={lang} />}
+        {module === 'verification' && <ParentVerification lang={lang} />}
       </div>
 
       <nav className="h-16 bg-white border-t border-[#D3D8E0] flex items-stretch shrink-0 fixed bottom-0 left-0 right-0 max-w-md mx-auto z-30">

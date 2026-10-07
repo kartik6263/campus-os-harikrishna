@@ -6,6 +6,7 @@ import { useLang } from '../lib/language';
 import { PRODUCT_NAME, useInstitution } from '../lib/institution';
 import { Button, EmptyState, InlineAlert, Input, Modal, Spinner, toast } from '../components/ui';
 import type { Screen } from '../lib/data';
+import IdentityVerification from '../components/IdentityVerification';
 
 /**
  * The vendor portal — a supplier's own side of procurement, over
@@ -502,6 +503,12 @@ function Profile({ me }: { me: Me }) {
           <div><Button loading={save.isPending} disabled={!dirty || contactName.trim().length < 2 || categories.length === 0} onClick={() => save.mutate()}>{t('Save changes', 'परिवर्तन सहेजें')}</Button></div>
         </div>
       </Panel>
+      <div className="md:col-span-2">
+        <Panel title={t('Contact person — DigiLocker verification', 'संपर्क व्यक्ति — डिजीलॉकर सत्यापन')}>
+          <p className="text-[12px] text-[#5A6577] mb-3">{t('The contact person proves who they are with their own DigiLocker; the name is matched with the contact person above.', 'संपर्क व्यक्ति अपने डिजीलॉकर से पहचान सिद्ध करते हैं; नाम ऊपर दिए संपर्क व्यक्ति से मिलाया जाता है।')}</p>
+          <div className="-mx-4 -mb-4 border-t border-[#D3D8E0]"><IdentityVerification allowDocuments={false} /></div>
+        </Panel>
+      </div>
     </div>
   );
 }

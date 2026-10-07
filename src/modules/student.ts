@@ -79,6 +79,11 @@ studentRouter.get(
 
     // Two round trips regardless of how many subjects the student takes:
     // every session held, and this student's attended session ids.
+    // Sessions are keyed by their date on the Indian calendar; one dated today
+    // has been held (or is being held) even before 05:30 IST.
+    const ist = new Date(Date.now() + 330 * 60_000);
+    const heldBy = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate());
+
     const [sessions, attended] = await Promise.all([
       prisma.classSession.findMany({
         where: { subjectId: { in: subjectIds } },
@@ -119,7 +124,7 @@ studentRouter.get(
         classesNeeded: classesNeeded(present, total),
         // The last ten classes held, oldest first, with this student's mark.
         recent: sessions
-          .filter((x) => x.subjectId === e.subjectId && x.date.getTime() <= Date.now())
+          .filter((x) => x.subjectId === e.subjectId && x.date.getTime() <= heldBy)
           .sort((a, b) => b.date.getTime() - a.date.getTime())
           .slice(0, 10)
           .reverse()
@@ -127,7 +132,7 @@ studentRouter.get(
         // Classes this student is not marked present for, newest first, so a
         // wrong mark can be disputed against the exact class.
         missed: sessions
-          .filter((x) => x.subjectId === e.subjectId && !attendedSessionIds.has(x.id) && x.date.getTime() <= Date.now())
+          .filter((x) => x.subjectId === e.subjectId && !attendedSessionIds.has(x.id) && x.date.getTime() <= heldBy)
           .sort((a, b) => b.date.getTime() - a.date.getTime())
           .slice(0, 30)
           .map((x) => ({ sessionId: x.id, date: x.date, time: `${x.startTime}–${x.endTime}` })),

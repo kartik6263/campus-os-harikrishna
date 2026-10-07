@@ -11,6 +11,7 @@ import Landing from './screens/Landing';
 import Login from './screens/Login';
 import { ForceChangePassword, ResetPassword } from './screens/PasswordScreens';
 import type { Screen } from './lib/data';
+import { readDigilockerReturn } from './lib/verification';
 
 // Each workspace is its own chunk, fetched when first opened: a student never
 // downloads the examination back-office, nor a vendor the student portal.
@@ -29,6 +30,7 @@ const IntelligenceLayer = lazy(() => import('./screens/IntelligenceLayer'));
 const ParentPortal = lazy(() => import('./screens/ParentPortal'));
 const VendorPortal = lazy(() => import('./screens/VendorPortal'));
 const MobileAppShowcase = lazy(() => import('./screens/MobileAppShowcase'));
+const DigiLockerReturn = lazy(() => import('./screens/DigiLockerReturn'));
 
 const pageSpinner = <div className="min-h-screen flex items-center justify-center bg-[#EDEFF3]"><Spinner size={24} /></div>;
 
@@ -65,6 +67,8 @@ function readVerifyLink(): { no: string; sig?: string } | null {
   return { no, sig: q.get('sig') ?? undefined };
 }
 const VERIFY_LINK = readVerifyLink();
+/** Back from DigiLocker's consent page, with a code for the server. */
+const DIGILOCKER_RETURN = readDigilockerReturn();
 
 const LOGIN_ROUTE: Partial<Record<Screen, 'student' | 'staff' | 'admin' | 'parent' | 'vendor'>> = {
   'login-student': 'student',
@@ -78,6 +82,7 @@ function Router() {
   const verifyLink = VERIFY_LINK;
   const [screen, setScreen] = useState<Screen>(verifyLink ? 'cert-verify' : 'landing');
   const [resetToken, setResetToken] = useState(readResetToken);
+  const [dlReturn, setDlReturn] = useState(DIGILOCKER_RETURN);
   const { user, loading } = useAuth();
 
   function navigate(s: Screen) {
@@ -87,6 +92,18 @@ function Router() {
 
   if (resetToken) {
     return <ResetPassword token={resetToken} onDone={s => { setResetToken(null); navigate(s); }} />;
+  }
+
+  // The code DigiLocker sent back is finished under the person's own session:
+  // signed out by then, they sign in first and it carries on.
+  if (dlReturn) {
+    if (loading) return pageSpinner;
+    if (!user) return <Login onNavigate={navigate} route="chooser" />;
+    return (
+      <Suspense fallback={pageSpinner}>
+        <DigiLockerReturn data={dlReturn} onDone={() => { setDlReturn(null); navigate(HOME[user.role]); }} />
+      </Suspense>
+    );
   }
 
   // A password the IT Cell issued must be replaced before anything else —

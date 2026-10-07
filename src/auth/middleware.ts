@@ -15,7 +15,7 @@ declare global {
 }
 
 /** The only API paths a VENDOR token may reach. */
-const VENDOR_REACHABLE = ['/api/vendor', '/api/auth', '/api/institution'];
+const VENDOR_REACHABLE = ['/api/vendor', '/api/auth', '/api/institution', '/api/verification'];
 
 /** Roles that may name any student by id: the campus's own staff. */
 const STAFF_ROLES: Role[] = ['FACULTY', 'OFFICE', 'PRINCIPAL', 'REGISTRAR', 'ADMIN'];

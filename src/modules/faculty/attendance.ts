@@ -9,7 +9,9 @@ import {
   lockedAt,
   ownedAssignment,
   ownedSession,
+  attendanceFor,
 } from './shared.js';
+import { recordFor } from '../itconsole/audit.js';
 
 export const facultyAttendanceRouter = Router();
 
@@ -143,7 +145,7 @@ facultyAttendanceRouter.post(
       ),
       prisma.classSession.update({
         where: { id: session.id },
-        data: draft ? { markedById: facultyId } : { markedAt: now, markedById: facultyId },
+        data: draft ? { markedById: facultyId } : { markedAt: session.markedAt ?? now, markedById: facultyId },
       }),
     ]);
 
@@ -229,18 +231,22 @@ facultyAttendanceRouter.get(
  * The marking screen is organised by subject and day, not by slot, so this is
  * the bridge: it answers "which class is this, and has it been opened yet?"
  */
-async function slotFor(assignmentId: string, facultyId: string, date: Date) {
+async function slotFor(assignmentId: string, facultyId: string, date: Date, slotId?: string) {
   const assignment = await ownedAssignment(assignmentId, facultyId);
 
   const index = date.getUTCDay();
   const day = index === 0 ? null : (WEEKDAYS[index - 1] ?? null);
 
-  const slot = day
-    ? await prisma.timetableSlot.findFirst({
-        where: { facultyId, subjectId: assignment.subjectId, day },
+  // A subject can meet more than once on a day (a lecture and a lab); the
+  // caller picks which, and the first of the day is the default.
+  const daySlots = day
+    ? await prisma.timetableSlot.findMany({
+        where: { facultyId, subjectId: assignment.subjectId, day, term: assignment.term },
         orderBy: { startTime: 'asc' },
       })
-    : null;
+    : [];
+  const slot = (slotId ? daySlots.find((s) => s.id === slotId) : daySlots[0]) ?? null;
+  if (slotId && !slot) throw ApiError.badRequest('That class is not on your timetable for this day');
 
   const session = slot
     ? await prisma.classSession.findUnique({
@@ -254,14 +260,22 @@ async function slotFor(assignmentId: string, facultyId: string, date: Date) {
       })
     : null;
 
-  return { assignment, slot, session };
+  return { assignment, slot, session, daySlots };
+}
+
+/** A roll call for a day that has not happened yet would be invention. */
+function refuseFuture(date: Date) {
+  if (date.getTime() > todayUtc().getTime()) {
+    throw ApiError.badRequest('Attendance cannot be marked for a future date');
+  }
 }
 
 const WEEKDAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'] as const;
 
 const dayStart = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
+/** Today's date on the Indian calendar, as the midnight-UTC date the sheets key on. */
 const todayUtc = () => {
-  const n = new Date();
+  const n = new Date(Date.now() + 330 * 60_000);
   return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate()));
 };
 
@@ -276,13 +290,14 @@ const todayUtc = () => {
 facultyAttendanceRouter.get(
   '/subjects/:assignmentId/sheet',
   validate('params', z.object({ assignmentId: z.string().min(1) })),
-  validate('query', z.object({ date: z.string().date().optional() })),
+  validate('query', z.object({ date: z.string().date().optional(), slotId: z.string().optional(), facultyId: z.string().optional() })),
   asyncHandler(async (req, res) => {
     const facultyId = await resolveFacultyId(req);
     const { assignmentId } = req.params as { assignmentId: string };
     const date = typeof req.query.date === 'string' ? dayStart(req.query.date) : todayUtc();
+    const slotId = typeof req.query.slotId === 'string' ? req.query.slotId : undefined;
 
-    const { assignment, slot, session } = await slotFor(assignmentId, facultyId, date);
+    const { assignment, slot, session, daySlots } = await slotFor(assignmentId, facultyId, date, slotId);
 
     const [enrolments, records] = await Promise.all([
       prisma.enrolment.findMany({
@@ -299,6 +314,8 @@ facultyAttendanceRouter.get(
     ]);
 
     const byStudent = new Map(records.map((r) => [r.studentId, r]));
+    const running = await attendanceFor(enrolments.map((e) => e.studentId), [assignment.subjectId]);
+    const qrOpen = Boolean(session?.qrToken && session.qrExpiresAt && session.qrExpiresAt.getTime() > Date.now());
 
     res.json({
       assignmentId: assignment.id,
@@ -306,6 +323,10 @@ facultyAttendanceRouter.get(
       subject: assignment.subject.name,
       classLabel: assignment.classLabel,
       date,
+      today: date.getTime() === todayUtc().getTime(),
+      future: date.getTime() > todayUtc().getTime(),
+      daySlots: daySlots.map((s) => ({ slotId: s.id, time: `${s.startTime}–${s.endTime}`, room: s.room, cancelled: s.cancelled })),
+      qrOpen,
       scheduled: slot !== null,
       slotId: slot?.id ?? null,
       time: slot ? `${slot.startTime}–${slot.endTime}` : null,
@@ -318,6 +339,7 @@ facultyAttendanceRouter.get(
       lockHours: ATTENDANCE_LOCK_HOURS,
       students: enrolments.map((e) => {
         const record = byStudent.get(e.studentId);
+        const run = running.get(`${e.studentId}:${assignment.subjectId}`);
         return {
           id: e.student.id,
           rollNo: e.student.rollNo,
@@ -326,9 +348,44 @@ facultyAttendanceRouter.get(
           status: record?.status ?? null,
           source: record?.source ?? null,
           markedAt: record?.markedAt ?? null,
+          runningPercent: run?.percent ?? null,
+          runningHeld: run?.total ?? 0,
         };
       }),
     });
+  }),
+);
+
+// ─── POST /api/faculty/subjects/:assignmentId/sheet/open ──────────────────────
+
+/**
+ * Opens the class for a day without marking anyone, so the lecturer can put
+ * the rotating QR code on the screen and let the class mark itself.
+ */
+facultyAttendanceRouter.post(
+  '/subjects/:assignmentId/sheet/open',
+  validate('params', z.object({ assignmentId: z.string().min(1) })),
+  validate('body', z.object({ date: z.string().date().optional(), slotId: z.string().optional() }).default({})),
+  asyncHandler(async (req, res) => {
+    const facultyId = await resolveFacultyId(req);
+    const { assignmentId } = req.params as { assignmentId: string };
+    const body = req.body as { date?: string; slotId?: string };
+    const date = body.date ? dayStart(body.date) : todayUtc();
+    // A QR code is scanned in the room, so only today's class can open one.
+    if (date.getTime() !== todayUtc().getTime()) throw ApiError.badRequest('QR attendance can only be taken for today’s class');
+
+    const { assignment, slot, session } = await slotFor(assignmentId, facultyId, date, body.slotId);
+    if (!slot) throw ApiError.badRequest(`${assignment.subject.code} is not on your timetable today`);
+    if (slot.cancelled) throw ApiError.badRequest('That class is cancelled');
+    if (isLocked(session?.markedAt ?? null)) throw ApiError.conflict('This register is already locked');
+
+    const faculty = await prisma.faculty.findUniqueOrThrow({ where: { id: facultyId }, select: { name: true } });
+    const open = session ?? (await prisma.classSession.upsert({
+      where: { subjectId_date_startTime: { subjectId: assignment.subjectId, date, startTime: slot.startTime } },
+      create: { subjectId: assignment.subjectId, date, startTime: slot.startTime, endTime: slot.endTime, room: slot.room, faculty: faculty.name, facultyId },
+      update: {},
+    }));
+    res.status(201).json({ sessionId: open.id });
   }),
 );
 
@@ -345,6 +402,7 @@ facultyAttendanceRouter.post(
     'body',
     z.object({
       date: z.string().date().optional(),
+      slotId: z.string().optional(),
       records: z
         .array(z.object({ studentId: z.string().min(1), status: STATUS }))
         .min(1, 'Mark at least one student'),
@@ -356,12 +414,14 @@ facultyAttendanceRouter.post(
     const { assignmentId } = req.params as { assignmentId: string };
     const body = req.body as {
       date?: string;
+      slotId?: string;
       records: Array<{ studentId: string; status: z.infer<typeof STATUS> }>;
       draft: boolean;
     };
 
     const date = body.date ? dayStart(body.date) : todayUtc();
-    const { assignment, slot, session } = await slotFor(assignmentId, facultyId, date);
+    refuseFuture(date);
+    const { assignment, slot, session } = await slotFor(assignmentId, facultyId, date, body.slotId);
 
     if (!slot) {
       throw ApiError.badRequest(
@@ -438,11 +498,17 @@ facultyAttendanceRouter.post(
       ),
       prisma.classSession.update({
         where: { id: open.id },
-        data: body.draft ? { markedById: facultyId } : { markedAt: now, markedById: facultyId },
+        data: body.draft ? { markedById: facultyId } : { markedAt: open.markedAt ?? now, markedById: facultyId },
       }),
     ]);
 
     const present = body.records.filter((r) => r.status !== 'ABSENT').length;
+    await recordFor(req, {
+      module: 'Attendance',
+      action: body.draft ? 'Roll call saved as draft' : 'Roll call submitted',
+      target: `${assignment.subject.code} ${date.toISOString().slice(0, 10)} ${slot.startTime}`,
+      detail: `${present} present, ${body.records.length - present} absent`,
+    });
 
     res.status(201).json({
       sessionId: open.id,
@@ -451,8 +517,8 @@ facultyAttendanceRouter.post(
       present,
       absent: body.records.length - present,
       draft: body.draft,
-      markedAt: body.draft ? null : now,
-      lockedAt: body.draft ? null : lockedAt(now),
+      markedAt: body.draft ? null : (open.markedAt ?? now),
+      lockedAt: body.draft ? null : lockedAt(open.markedAt ?? now),
     });
   }),
 );
@@ -503,7 +569,8 @@ facultyAttendanceRouter.get(
         markedAs: c.markedAs,
         requestedStatus: c.requestedStatus,
         reason: c.reason,
-        attachment: c.attachment,
+        // The id of the proof the student uploaded; staff may open any attachment.
+        attachmentFileId: c.attachment?.startsWith('campusos-file:') ? c.attachment.slice('campusos-file:'.length) : null,
         status: c.status,
         raisedAt: c.raisedAt,
         decidedAt: c.decidedAt,
@@ -556,10 +623,24 @@ facultyAttendanceRouter.post(
     const now = new Date();
 
     if (decision === 'REJECT') {
-      const updated = await prisma.attendanceCorrection.update({
-        where: { id },
-        data: { status: 'REJECTED', decidedAt: now, decidedById: facultyId, decisionNote: note },
-      });
+      if (!note?.trim()) throw ApiError.badRequest('Give the student a reason for rejecting');
+      const [updated] = await prisma.$transaction([
+        prisma.attendanceCorrection.update({
+          where: { id },
+          data: { status: 'REJECTED', decidedAt: now, decidedById: facultyId, decisionNote: note },
+        }),
+        prisma.notification.create({
+          data: {
+            studentId: correction.studentId,
+            kind: 'ATTENDANCE',
+            title: 'Attendance correction rejected',
+            titleHi: 'उपस्थिति सुधार अस्वीकृत',
+            body: `Your request was not accepted: ${note}`,
+            href: '/attendance',
+          },
+        }),
+      ]);
+      await recordFor(req, { module: 'Attendance', action: 'Correction rejected', target: id, detail: note });
       res.json({ id: updated.id, status: updated.status, decidedAt: updated.decidedAt });
       return;
     }
@@ -596,6 +677,7 @@ facultyAttendanceRouter.post(
         },
       }),
     ]);
+    await recordFor(req, { module: 'Attendance', action: 'Correction approved', target: id, detail: `${correction.markedAs} → ${correction.requestedStatus}` });
 
     res.json({
       id: updated.id,

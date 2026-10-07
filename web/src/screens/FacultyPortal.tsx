@@ -12,6 +12,8 @@ import StudyMaterial from './faculty/StudyMaterial';
 import LeaveApplication from './faculty/LeaveApplication';
 import StudentMentoring from './faculty/StudentMentoring';
 import ParentMessages from './faculty/ParentMessages';
+import MySubjects from './faculty/MySubjects';
+import SubjectAllocation from './shared/SubjectAllocation';
 import { inst } from '../lib/institution';
 
 interface Props {
@@ -20,6 +22,8 @@ interface Props {
 
 type Module =
   | 'dashboard'
+  | 'subjects'
+  | 'allocation'
   | 'attendance'
   | 'marks'
   | 'timetable'
@@ -30,6 +34,8 @@ type Module =
 
 const MODULE_LABELS: Record<Module, string> = {
   dashboard: 'Dashboard',
+  subjects: 'My Subjects',
+  allocation: 'Subject Allocation',
   attendance: 'Attendance Marking',
   marks: 'Internal Marks',
   timetable: 'Timetable',
@@ -126,6 +132,7 @@ function IconLogout() {
 
 const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: IconHome },
+  { id: 'subjects', label: 'My Subjects', icon: IconUsers },
   { id: 'attendance', label: 'Attendance Marking', icon: IconCheck },
   { id: 'marks', label: 'Internal Marks', icon: IconEdit },
   { id: 'timetable', label: 'Timetable', icon: IconCalendar },
@@ -167,7 +174,7 @@ export default function FacultyPortal({ onNavigate }: Props) {
 
         {/* Nav */}
         <nav className="flex-1 py-2 overflow-y-auto">
-          {NAV_ITEMS.map((item) => {
+          {[...NAV_ITEMS, ...(faculty?.isHod ? [{ id: 'allocation' as Module, label: 'Subject Allocation (HOD)', icon: IconCalendar }] : [])].map((item) => {
             const active = module === item.id;
             return (
               <button
@@ -229,6 +236,8 @@ export default function FacultyPortal({ onNavigate }: Props) {
         {/* Content */}
         <main className="flex-1 overflow-y-auto">
           {module === 'dashboard' && <FacultyDashboard {...moduleProps} />}
+          {module === 'subjects' && <MySubjects {...moduleProps} />}
+          {module === 'allocation' && <SubjectAllocation />}
           {module === 'attendance' && <AttendanceMarking {...moduleProps} />}
           {module === 'marks' && <MarksEntry {...moduleProps} />}
           {module === 'timetable' && <FacultyTimetable {...moduleProps} />}

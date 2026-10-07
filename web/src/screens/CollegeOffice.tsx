@@ -8,20 +8,31 @@ import AdmissionEntry from './office/AdmissionEntry';
 import FeeCollection from './office/FeeCollection';
 import CertificateQueue from './office/CertificateQueue';
 import ExamScrutiny from './office/ExamScrutiny';
+import VerificationRegister from './office/VerificationRegister';
 import { inst, instPlace } from '../lib/institution';
 
 interface Props {
   onNavigate: (s: Screen) => void;
 }
 
-type Module = 'admission' | 'fee' | 'certificate' | 'exam';
+type Module = 'admission' | 'fee' | 'certificate' | 'exam' | 'verification';
 
 const MODULE_LABELS: Record<Module, string> = {
   admission: 'Admission Entry',
   fee: 'Fee Collection',
   certificate: 'Certificate Queue',
   exam: 'Exam Scrutiny',
+  verification: 'Identity Verification',
 };
+
+function IconShield() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <polyline points="9 12 11 14 15 10" />
+    </svg>
+  );
+}
 
 function IconUsers() {
   return (
@@ -89,6 +100,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'fee', label: 'Fee Collection', icon: IconCash },
   { id: 'certificate', label: 'Certificate Queue', icon: IconFile },
   { id: 'exam', label: 'Exam Scrutiny', icon: IconClipboard },
+  { id: 'verification', label: 'Identity Verification', icon: IconShield },
 ];
 
 export default function CollegeOffice({ onNavigate }: Props) {
@@ -177,6 +189,7 @@ export default function CollegeOffice({ onNavigate }: Props) {
           {module === 'fee' && <FeeCollection {...moduleProps} />}
           {module === 'certificate' && <CertificateQueue {...moduleProps} />}
           {module === 'exam' && <ExamScrutiny {...moduleProps} />}
+          {module === 'verification' && <VerificationRegister />}
         </main>
       </div>
 

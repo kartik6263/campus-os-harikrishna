@@ -6,6 +6,7 @@ import { marksRouter } from './marks.js';
 import { mentoringRouter } from './mentoring.js';
 import { leaveRouter } from './leave.js';
 import { materialsRouter } from './materials.js';
+import { subjectRouter } from './subject.js';
 
 /**
  * Phase 2 — everything a lecturer does.
@@ -25,3 +26,4 @@ facultyRouter.use(marksRouter);
 facultyRouter.use(mentoringRouter);
 facultyRouter.use(leaveRouter);
 facultyRouter.use(materialsRouter);
+facultyRouter.use(subjectRouter);

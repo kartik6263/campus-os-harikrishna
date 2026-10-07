@@ -220,6 +220,13 @@ vendorRouter.patch(
       throw ApiError.badRequest('Supply categories are fixed once empanelled. Ask the purchase desk to change them.');
     }
     const updated = await prisma.vendor.update({ where: { id: v.id }, data: body });
+    // A verification vouched for the old contact person, not the new one.
+    if (body.contactName && body.contactName !== v.contactName && v.userId) {
+      await prisma.identityVerification.updateMany({
+        where: { userId: v.userId, identityStatus: { not: 'UNVERIFIED' } },
+        data: { identityStatus: 'UNVERIFIED', digilockerId: null, nameMatch: null, verifiedAt: null, identityNote: 'The contact person changed; verify again' },
+      });
+    }
     res.json({ id: updated.id, contactName: updated.contactName, contactMobile: updated.contactMobile, categories: updated.categories });
   }),
 );

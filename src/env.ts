@@ -35,6 +35,17 @@ const schema = z.object({
   /** Signs the payment.captured webhook — the backstop if a browser closes mid-payment. */
   RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
 
+  /**
+   * DigiLocker (MeitY), as a Requester: the institute's client ID and secret
+   * from partners.digilocker.gov.in. Unset: profiles are verified by the
+   * office from uploaded proof instead.
+   */
+  DIGILOCKER_CLIENT_ID: z.string().optional(),
+  DIGILOCKER_CLIENT_SECRET: z.string().optional(),
+  /** Registered with DigiLocker. Defaults to the web app's address (APP_URL + "/"). */
+  DIGILOCKER_REDIRECT_URI: z.string().url().optional(),
+  DIGILOCKER_API_BASE: z.string().url().default('https://digilocker.meripehchaan.gov.in/public/oauth2'),
+
   // ── Phase 2: shared pool ──
   /** true: this backend serves many institutes, each in its own schema. */
   POOL_MODE: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),

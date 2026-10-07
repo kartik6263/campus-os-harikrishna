@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../../lib/api';
 import { Button, Modal, InlineAlert, Avatar, Timeline, toast } from '../../components/ui';
-import { useAddMentorNote, useMenteeList, type LegacyMentee as Mentee } from '../../lib/facultyqueries';
+import { useFacultyProfile, useAddMentorNote, useMenteeList, type LegacyMentee as Mentee } from '../../lib/facultyqueries';
 
 interface Props {
   onNavigate: (s: any) => void;
@@ -43,6 +43,7 @@ function attStatusLabel(pct: number): { label: string; color: string } {
 }
 
 export default function StudentMentoring({ onNavigate, onModule }: Props) {
+  const termLabel = useFacultyProfile().data?.term ?? '…';
   const { data: mentees } = useMenteeList();
   const addNote = useAddMentorNote();
 
@@ -118,7 +119,7 @@ export default function StudentMentoring({ onNavigate, onModule }: Props) {
       {/* Header */}
       <div className="bg-white border-b border-[#D3D8E0] px-6 py-4 shrink-0">
         <h2 className="text-[16px] font-semibold text-[#16264A]">Student Mentoring</h2>
-        <p className="text-[12px] text-[#5A6577]">Academic year 2024–25 · Odd Semester</p>
+        <p className="text-[12px] text-[#5A6577]">Term {termLabel}</p>
       </div>
 
       {/* Dashboard summary strip */}

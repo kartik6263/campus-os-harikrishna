@@ -184,3 +184,13 @@ export async function requestedTerm(req: Request): Promise<string> {
   const term = req.query.term;
   return typeof term === 'string' && term.length > 0 ? term : currentTerm();
 }
+
+/**
+ * Today on the Indian calendar, as the midnight-UTC date class sessions are
+ * keyed by. "Held so far" means on or before this — comparing with the clock
+ * instead would hide today's classes until 05:30 IST.
+ */
+export function istToday(): Date {
+  const n = new Date(Date.now() + 330 * 60_000);
+  return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate()));
+}

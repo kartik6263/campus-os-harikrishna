@@ -83,6 +83,8 @@ model User {
   // A parent signs in as themselves and reads their child's record.
   wards Student[] @relation("StudentGuardian")
 
+  identity IdentityVerification? @relation("IdentityOwner")
+
   @@index([role])
   @@map("users")
 }
@@ -2066,4 +2068,81 @@ model LoginCode {
 
   @@index([userId, createdAt])
   @@map("login_codes")
+}
+
+// ═══ Identity verification — DigiLocker and the ABC ID ═══════════════════════
+
+enum VerificationStatus {
+  UNVERIFIED
+  /// Submitted by hand, or DigiLocker disagreed with the record: the office decides.
+  PENDING_REVIEW
+  VERIFIED
+  REJECTED
+}
+
+/// What DigiLocker vouched for about one person, and their Academic Bank of
+/// Credits ID. Any role may verify; a student also has an ABC ID.
+///
+/// Only what a reviewer needs is kept: never the Aadhaar number (its last four
+/// digits at most), never a DigiLocker access token.
+model IdentityVerification {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  /// One DigiLocker account vouches for one person here, so nobody can
+  /// verify a classmate's account with their own DigiLocker.
+  digilockerId        String?            @unique
+  dlName              String?
+  /// As DigiLocker gives it, DDMMYYYY.
+  dlDob               String?
+  dlGender            String?
+  eaadhaar            Boolean            @default(false)
+  aadhaarLast4        String?
+  /// null: the record had nothing to compare against.
+  nameMatch           Boolean?
+  dobMatch            Boolean?
+  identityStatus      VerificationStatus @default(UNVERIFIED)
+  /// DIGILOCKER, or DOCUMENT: an ID proof uploaded for the office to check.
+  identitySource      String?
+  identityDocType     String?
+  identityProofFileId String?
+  identityNote        String?
+  verifiedAt          DateTime?
+  /// The documents in the person's DigiLocker issued by others: name, issuer, date.
+  documents           Json?
+
+  abcId          String?
+  /// DIGILOCKER (read from the issued ABC/APAAR card) or SELF (typed in).
+  abcSource      String?
+  abcStatus      VerificationStatus @default(UNVERIFIED)
+  abcNote        String?
+  abcProofFileId String?
+  abcVerifiedAt  DateTime?
+
+  reviewedById String?
+  reviewedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user User @relation("IdentityOwner", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([identityStatus])
+  @@index([abcStatus])
+  @@map("identity_verifications")
+}
+
+/// One trip to DigiLocker's consent page: the OAuth state and PKCE verifier,
+/// usable once, for ten minutes, by the user who started it.
+model DigilockerSession {
+  id           String    @id @default(cuid())
+  state        String    @unique
+  codeVerifier String
+  redirectUri  String
+  userId       String
+  expiresAt    DateTime
+  usedAt       DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([userId])
+  @@map("digilocker_sessions")
 }

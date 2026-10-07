@@ -13,6 +13,7 @@ import { institutionInput } from '../institution.js';
 import { env } from '../../env.js';
 import { issueResetLink } from '../../auth/routes.js';
 import { mailConfigured } from '../../lib/mailer.js';
+import { digilockerEnabled, redirectUri as digilockerRedirect } from '../../lib/digilocker.js';
 import { metricsSnapshot, startedAt as metricsStartedAt } from '../../lib/metrics.js';
 
 /**
@@ -739,6 +740,7 @@ itRouter.get(
         { name: 'Email (SMTP)', configured: mailConfigured, ok: mailConfigured, detail: mailConfigured ? `via ${env.SMTP_HOST}` : 'Not configured — reset links and sign-in codes are not emailed' },
         { name: 'AI assistant (Claude)', configured: Boolean(env.ANTHROPIC_API_KEY), ok: true, detail: env.ANTHROPIC_API_KEY ? `Model ${env.ANTHROPIC_MODEL}` : 'No key — the assistant answers from built-in reports' },
         { name: 'Bot protection (Turnstile)', configured: Boolean(env.TURNSTILE_SECRET_KEY), ok: true, detail: env.TURNSTILE_SECRET_KEY ? 'Sign-in forms are checked' : 'Off — set TURNSTILE_SECRET_KEY to enable' },
+        { name: 'DigiLocker (identity & ABC ID)', configured: digilockerEnabled(), ok: true, detail: digilockerEnabled() ? `Redirect URI ${digilockerRedirect()}` : 'Not connected — set DIGILOCKER_CLIENT_ID and DIGILOCKER_CLIENT_SECRET; until then the office verifies uploaded proof' },
         { name: 'File storage', configured: true, ok: true, detail: `${files._count} file(s), ${((files._sum.size ?? 0) / 1048576).toFixed(1)} MB in the database` },
       ],
       traffic: metricsSnapshot(),

@@ -27,9 +27,19 @@ function TenantProblem({ outcome }: { outcome: Extract<TenantOutcome, { kind: 'p
   )
 }
 
+// DigiLocker returns to this address even when the trip began in the mobile
+// app; the state says so (dl.m.<app scheme>.…), and the code goes on to the app.
+const dlState = new URLSearchParams(location.search).get('state') ?? ''
+const toApp = /^dl\.m\.(campusos(?:-[a-z0-9]+)?)\./.exec(dlState)
+if (toApp) {
+  location.replace(`${toApp[1]}://digilocker${location.search}`)
+  document.getElementById('root')!.innerHTML =
+    '<p style="font-family:system-ui,sans-serif;text-align:center;margin-top:30vh;color:#16264A">Returning to the CampusOS app…<br><small style="color:#5A6577">If nothing happens, open the app on this phone; DigiLocker was reached from there.</small></p>'
+}
+
 // Which institute's backend to talk to is settled before anything else loads,
 // so every module (and every cached value) belongs to the right institute.
-void (async () => {
+if (!toApp) void (async () => {
   const outcome = await resolveTenant()
   const root = ReactDOM.createRoot(document.getElementById('root')!)
   if (outcome.kind === 'problem') {

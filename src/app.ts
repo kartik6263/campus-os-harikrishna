@@ -31,6 +31,8 @@ import { assistantRouter } from './modules/assistant/index.js';
 import { learningRouter } from './modules/learning.js';
 import { verifyRouter } from './modules/verify.js';
 import { vendorRouter } from './modules/vendor.js';
+import { verificationRouter } from './modules/verification.js';
+import { allocationRouter } from './modules/allocation.js';
 import { poolRouter, tenantScope } from './tenancy.js';
 import { metricsMiddleware } from './lib/metrics.js';
 
@@ -104,6 +106,8 @@ export function createApp() {
   app.use('/api/learning', learningRouter);
   app.use('/api/verify', verifyRouter);
   app.use('/api/vendor', vendorRouter);
+  app.use('/api/verification', verificationRouter);
+  app.use('/api/allocation', allocationRouter);
   // The students' own halves of the office and examination counters.
   app.use('/api/student/certificates', studentCertificatesRouter);
   app.use('/api/student/revaluations', requireAuth, studentRevaluationRouter);

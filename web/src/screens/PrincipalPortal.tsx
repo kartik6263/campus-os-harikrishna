@@ -9,10 +9,11 @@ import CollegeDashboard from './principal/CollegeDashboard';
 import ApprovalInbox from './principal/ApprovalInbox';
 import WorkloadAllocation from './principal/WorkloadAllocation';
 import AffiliationCompliance from './principal/AffiliationCompliance';
+import SubjectAllocation from './shared/SubjectAllocation';
 
 interface Props { onNavigate: (s: Screen) => void }
 
-type Module = 'inbox' | 'dashboard' | 'workload' | 'affiliation';
+type Module = 'inbox' | 'dashboard' | 'allocation' | 'workload' | 'affiliation';
 
 
 
@@ -27,6 +28,7 @@ export default function PrincipalPortal({ onNavigate }: Props) {
   const navItems: Array<{ id: Module; label: string; badge?: number }> = [
     { id: 'inbox', label: 'Approval Inbox', badge: pendingCount },
     { id: 'dashboard', label: 'College Dashboard' },
+    { id: 'allocation', label: 'Subject Allocation' },
     { id: 'workload', label: 'Faculty Workload' },
     { id: 'affiliation', label: 'Affiliation Compliance' },
   ];
@@ -120,6 +122,7 @@ export default function PrincipalPortal({ onNavigate }: Props) {
         <main className="flex-1 overflow-auto">
           {module === 'inbox' && <ApprovalInbox onNavigate={onNavigate} onModule={(m) => setModule(m as Module)} />}
           {module === 'dashboard' && <CollegeDashboard onNavigate={onNavigate} onModule={(m) => setModule(m as Module)} />}
+          {module === 'allocation' && <SubjectAllocation />}
           {module === 'workload' && <WorkloadAllocation onNavigate={onNavigate} onModule={(m) => setModule(m as Module)} />}
           {module === 'affiliation' && <AffiliationCompliance onNavigate={onNavigate} onModule={(m) => setModule(m as Module)} />}
         </main>

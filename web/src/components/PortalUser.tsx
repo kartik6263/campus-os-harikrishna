@@ -5,6 +5,7 @@ import { useAuth, displayName, ROLE_TITLES } from '../lib/auth';
 import type { Screen } from '../lib/data';
 import { Avatar } from './ui';
 import { canOpen } from '../lib/workspaces';
+import { VerificationDialog, VerificationMenuItem } from './IdentityVerification';
 
 interface Activity { id: string; occurredAt: string; actorName: string; module: string; action: string; target: string; outcome: string }
 
@@ -27,6 +28,7 @@ export default function PortalUser({ onNavigate, dark = true }: { onNavigate: (s
   const { user, signOut } = useAuth();
   const [menu, setMenu] = useState<null | 'bell' | 'user'>(null);
   const [seenAt, setSeenAt] = useState(readSeen);
+  const [verifyOpen, setVerifyOpen] = useState(false);
   const staff = user && !['STUDENT', 'PARENT'].includes(user.role);
 
   const activity = useQuery({
@@ -85,11 +87,13 @@ export default function PortalUser({ onNavigate, dark = true }: { onNavigate: (s
               <p className="text-[12px] text-[#5A6577]">{user.faculty?.designation ?? user.office?.designation ?? ROLE_TITLES[user.role]}</p>
               <p className="text-[11px] text-[#5A6577] truncate">{user.email}</p>
             </div>
+            <VerificationMenuItem onClick={() => { setMenu(null); setVerifyOpen(true); }} />
             {staff && <button onClick={() => { setMenu(null); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true })); }} className="w-full text-left px-4 py-2.5 text-[13px] text-[#16264A] hover:bg-[#EDEFF3] cursor-pointer">Switch workspace · Ctrl K</button>}
             <button onClick={async () => { setMenu(null); await signOut(); onNavigate('landing'); }} className="w-full text-left px-4 py-2.5 text-[13px] text-[#A8242C] hover:bg-[#FEE2E2] cursor-pointer border-t border-[#D3D8E0]">Sign out</button>
           </div>
         )}
       </div>
+      <VerificationDialog open={verifyOpen} onClose={() => setVerifyOpen(false)} />
     </div>
   );
 }
