@@ -131,6 +131,12 @@ export default function More() {
             right={<Chevron />}
           />
           <ListRow
+            title={t('Verification', 'सत्यापन')}
+            subtitle={t('DigiLocker identity and ABC ID', 'डिजीलॉकर पहचान और ABC आईडी')}
+            onPress={() => router.push('/verification')}
+            right={<Chevron />}
+          />
+          <ListRow
             title={t('Digital ID card', 'डिजिटल आईडी कार्ड')}
             subtitle={t('Works offline', 'ऑफ़लाइन भी काम करता है')}
             onPress={() => router.push('/digital-id')}

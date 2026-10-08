@@ -20,11 +20,14 @@ import { useLang } from '@/lib/language';
 import { useInstitution } from '@/lib/institution';
 import { color, radius, space } from '@/theme/tokens';
 import { formatDate, useProfile } from '@/lib/queries';
+import { PILL, useMyVerification } from '@/lib/verification';
 
 export default function DigitalId() {
   const { t, lang } = useLang();
   const inst = useInstitution();
   const { data: student, isPending, isError, error } = useProfile();
+  const verification = useMyVerification();
+  const vStatus = verification.data?.identityStatus;
 
   return (
     <View style={{ flex: 1, backgroundColor: color.page }}>
@@ -118,8 +121,12 @@ export default function DigitalId() {
               value={`${student.abcCredits} / ${student.abcTarget}`}
             />
             <Field
-              label="DigiLocker"
-              value={student.digilockerLinked ? t('Linked', 'संबद्ध') : t('Not linked', 'असंबद्ध')}
+              label={t('Identity', 'पहचान')}
+              value={vStatus ? `${lang === 'hi' ? PILL[vStatus].labelHi : PILL[vStatus].label}${verification.data?.identitySource === 'DIGILOCKER' ? ' · DigiLocker' : ''}` : '—'}
+            />
+            <Field
+              label={t('ABC ID status', 'ABC आईडी स्थिति')}
+              value={verification.data ? (lang === 'hi' ? PILL[verification.data.abcStatus].labelHi : PILL[verification.data.abcStatus].label) : '—'}
             />
             <Field label={t('College code', 'कॉलेज कोड')} value={student.college.code} mono />
             <Field label={t('Category', 'श्रेणी')} value={student.category ?? "—"} />
