@@ -90,7 +90,8 @@ financeRouter.get(
       orderBy: { paidAt: 'desc' },
       take: 2000,
     });
-    const ok = payments.filter((p) => p.status === 'SUCCESS');
+    // Money received only: concessions credited and refunds paid out are not collections.
+    const ok = payments.filter((p) => p.status === 'SUCCESS' && p.kind === 'RECEIPT');
     const byMode: Record<string, number> = {};
     for (const p of ok) byMode[p.mode] = (byMode[p.mode] ?? 0) + p.amount;
     res.json({
@@ -104,7 +105,7 @@ financeRouter.get(
       },
       payments: payments.map((p) => ({
         id: p.id, paidAt: p.paidAt, amount: p.amount, mode: p.mode, status: p.status, head: p.head,
-        receiptNo: p.receiptNo, txnId: p.txnId, channel: p.receipt ? 'Counter' : 'Online',
+        receiptNo: p.receiptNo, txnId: p.txnId, kind: p.kind, channel: p.kind !== 'RECEIPT' ? 'Ledger' : p.receipt ? 'Counter' : 'Online',
         instrument: p.receipt?.instrument ?? null,
         student: p.student.name, enrolmentNo: p.student.enrolmentNo, programme: `${p.student.programme.shortName} ${p.student.semester}`,
       })),

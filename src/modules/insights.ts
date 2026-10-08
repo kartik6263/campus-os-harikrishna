@@ -1,8 +1,10 @@
+import { Prisma } from '@prisma/client';
 import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db.js';
 import { asyncHandler, validQuery, validate } from '../lib/http.js';
 import { requireAuth, requireRole } from '../auth/middleware.js';
+import { attendedStatuses, currentPolicy } from './attendance/policy.js';
 
 /**
  * Phase 11 — the institution at a glance.
@@ -25,13 +27,12 @@ const ADMINISTRATION = ['PRINCIPAL', 'REGISTRAR', 'ADMIN'] as const;
  */
 async function attendanceRate(since: Date | null): Promise<number | null> {
   const from = since ?? new Date(0);
+  // Same rule as everywhere: submitted roll calls only, the policy's statuses counted as attended.
   const [row] = await prisma.$queryRaw<Array<{ expected: bigint; present: bigint }>>`
-    SELECT
-      (SELECT COALESCE(SUM(e.n), 0) FROM class_sessions cs
-         JOIN (SELECT "subjectId", COUNT(*) AS n FROM enrolments GROUP BY "subjectId") e ON e."subjectId" = cs."subjectId"
-        WHERE cs.date >= ${from} AND cs.date <= now())::bigint AS expected,
-      (SELECT COUNT(*) FROM attendance_records ar JOIN class_sessions cs ON cs.id = ar."sessionId"
-        WHERE ar.status IN ('PRESENT', 'LATE') AND cs.date >= ${from} AND cs.date <= now())::bigint AS present`;
+    SELECT COUNT(*)::bigint AS expected,
+      COUNT(*) FILTER (WHERE ar.status::text IN (${Prisma.join(attendedStatuses(currentPolicy()))}))::bigint AS present
+    FROM attendance_records ar JOIN class_sessions cs ON cs.id = ar."sessionId"
+    WHERE cs."markedAt" IS NOT NULL AND cs.date >= ${from} AND cs.date <= now()`;
   const expected = Number(row?.expected ?? 0);
   return expected ? Math.round((Number(row!.present) / expected) * 1000) / 10 : null;
 }

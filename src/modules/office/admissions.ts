@@ -305,7 +305,7 @@ admissionsRouter.post(
   validate('params', z.object({ id: z.string().min(1) })),
   validate('body', z.object({ term: z.string().min(1).optional() }).default({})),
   asyncHandler(async (req, res) => {
-    await resolveStaffId(req);
+    const staff = await prisma.officeStaff.findUniqueOrThrow({ where: { id: await resolveStaffId(req) }, select: { name: true } });
     const { id } = req.params as { id: string };
     const { term } = req.body as { term?: string };
 
@@ -398,6 +398,15 @@ admissionsRouter.post(
       await tx.admissionApplication.update({
         where: { id },
         data: { status: 'ENROLLED', studentId: created.id },
+      });
+
+      // The first entry in the student's history on the rolls.
+      await tx.lifecycleEvent.create({
+        data: {
+          studentId: created.id, kind: 'ADMITTED', toStatus: 'ACTIVE', toSemester: 1, term: activeTerm,
+          reason: `Admitted to ${application.programme.code}, batch ${created.batch}`, reference: application.applicationNo,
+          actorId: req.auth!.sub, actorName: staff.name,
+        },
       });
 
       return created;

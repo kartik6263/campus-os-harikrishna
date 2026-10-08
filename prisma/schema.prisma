@@ -195,9 +195,9 @@ model Programme {
 }
 
 model Student {
-  id               String    @id @default(cuid())
-  enrolmentNo      String    @unique
-  rollNo           String    @unique
+  id               String        @id @default(cuid())
+  enrolmentNo      String        @unique
+  rollNo           String        @unique
   name             String
   nameHi           String?
   dob              DateTime
@@ -208,14 +208,19 @@ model Student {
   batch            String
   mobile           String?
   address          String?
-  apaarId          String?   @unique
-  abcId            String?   @unique
-  abcCredits       Int       @default(0)
-  abcTarget        Int       @default(120)
-  digilockerLinked Boolean   @default(false)
+  apaarId          String?       @unique
+  abcId            String?       @unique
+  abcCredits       Int           @default(0)
+  abcTarget        Int           @default(120)
+  digilockerLinked Boolean       @default(false)
   validUpto        DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  /// Where the student stands on the rolls; see StudentStatus.
+  status           StudentStatus @default(ACTIVE)
+  statusSince      DateTime      @default(now())
+  /// Set once, when the degree requirements were certified complete.
+  graduatedOn      DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 
   userId      String  @unique
   collegeId   String
@@ -227,30 +232,50 @@ model Student {
   programme Programme @relation(fields: [programmeId], references: [id])
   guardian  User?     @relation("StudentGuardian", fields: [guardianId], references: [id])
 
-  enrolments        Enrolment[]
-  attendanceRecords AttendanceRecord[]
-  feeItems          FeeItem[]
-  payments          Payment[]
-  instalments       Instalment[]
-  scholarships      ScholarshipAward[]
-  results           SemesterResult[]
-  notifications     Notification[]
-  busPass           BusPass?
-  mentorships       Mentorship[]
-  corrections       AttendanceCorrection[]
-  markEntries       MarkEntry[]
-  admission         AdmissionApplication?
-  counterReceipts   CounterReceipt[]
-  certificates      CertificateRequest[]
-  examForms         ExamForm[]
-  seatAllocations   SeatAllocation[]
-  answerScripts     AnswerScript[]
-  revaluations      RevaluationApplication[]
-  riskAssessments   RiskAssessment[]
-  interventions     Intervention[]
+  enrolments          Enrolment[]
+  attendanceRecords   AttendanceRecord[]
+  feeItems            FeeItem[]
+  feeConcessions      FeeConcession[]
+  feeRefunds          FeeRefund[]
+  malpracticeCases    MalpracticeCase[]
+  backlogResults      BacklogResult[]
+  payments            Payment[]
+  instalments         Instalment[]
+  scholarships        ScholarshipAward[]
+  results             SemesterResult[]
+  notifications       Notification[]
+  busPass             BusPass?
+  mentorships         Mentorship[]
+  corrections         AttendanceCorrection[]
+  markEntries         MarkEntry[]
+  admission           AdmissionApplication?
+  counterReceipts     CounterReceipt[]
+  certificates        CertificateRequest[]
+  examForms           ExamForm[]
+  seatAllocations     SeatAllocation[]
+  answerScripts       AnswerScript[]
+  revaluations        RevaluationApplication[]
+  riskAssessments     RiskAssessment[]
+  interventions       Intervention[]
+  lifecycleEvents     LifecycleEvent[]
+  lifecycleRequests   LifecycleRequest[]
+  clearances          NoDuesClearance[]
+  digitalCertificates DigitalCertificate[]
+  hostelApplications  HostelApplication[]
+  hostelAllotments    HostelAllotment[]
+  hostelComplaints    HostelComplaint[]
+  hostelLeaves        HostelLeave[]
+  hostelRoomChanges   HostelRoomChange[]
+  hostelVisitors      HostelVisitor[]
+  hostelRollCalls     HostelRollCallEntry[]
+  transportRequests   TransportRequest[]
+  tripBoardings       TripBoarding[]
+  attendanceLeaves    AttendanceLeave[]
+  condonations        AttendanceCondonation[]
 
   @@index([collegeId])
   @@index([programmeId])
+  @@index([status])
   @@map("students")
 }
 
@@ -266,14 +291,15 @@ model Subject {
 
   programme Programme @relation(fields: [programmeId], references: [id])
 
-  enrolments     Enrolment[]
-  timetableSlots TimetableSlot[]
-  classSessions  ClassSession[]
-  subjectResults SubjectResult[]
-  assignments    SubjectAssignment[]
-  materials      StudyMaterial[]
-  examFormRows   ExamFormSubject[]
-  examPapers     ExamPaper[]
+  enrolments       Enrolment[]
+  timetableSlots   TimetableSlot[]
+  timetableChanges TimetableChange[]
+  classSessions    ClassSession[]
+  subjectResults   SubjectResult[]
+  assignments      SubjectAssignment[]
+  materials        StudyMaterial[]
+  examFormRows     ExamFormSubject[]
+  examPapers       ExamPaper[]
 
   @@index([programmeId, semester])
   @@map("subjects")
@@ -321,8 +347,9 @@ model TimetableSlot {
   cancelReason String?
   cancelledAt  DateTime?
 
-  subject     Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  facultyUser Faculty? @relation(fields: [facultyId], references: [id])
+  subject     Subject           @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  facultyUser Faculty?          @relation(fields: [facultyId], references: [id])
+  changes     TimetableChange[]
 
   @@index([subjectId, day])
   @@index([facultyId, day])
@@ -405,8 +432,13 @@ model FeeItem {
   category  FeeCategory
   term      String
   dueDate   DateTime?
+  /// For a late fine: the fee head it is levied on.
+  fineFor   String?
 
-  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  student     Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  allocations FeeAllocation[]
+  concessions FeeConcession[]
+  refunds     FeeRefund[]
 
   @@index([studentId, term])
   @@map("fee_items")
@@ -416,6 +448,14 @@ enum PaymentStatus {
   PENDING
   SUCCESS
   FAILED
+  CANCELLED
+}
+
+/// What a ledger entry is: money received, a concession credited, or money paid back.
+enum PaymentKind {
+  RECEIPT
+  CONCESSION
+  REFUND
 }
 
 model Payment {
@@ -430,10 +470,15 @@ model Payment {
   status       PaymentStatus @default(PENDING)
   paidAt       DateTime      @default(now())
   instalmentId String?       @unique
+  kind         PaymentKind   @default(RECEIPT)
+  cancelledAt  DateTime?
+  cancelReason String?
+  cancelledBy  String?
 
-  student    Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  instalment Instalment?     @relation(fields: [instalmentId], references: [id])
-  receipt    CounterReceipt?
+  student     Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  instalment  Instalment?     @relation(fields: [instalmentId], references: [id])
+  receipt     CounterReceipt?
+  allocations FeeAllocation[]
 
   @@index([studentId])
   @@map("payments")
@@ -555,19 +600,25 @@ model Notification {
 
 // ─── Transport ────────────────────────────────────────────────────────────────
 
+/// A bus route: its stops in order, the vehicle and crew that run it.
 model TransportRoute {
   id          String   @id @default(cuid())
   routeNo     String   @unique
   name        String
-  busNo       String
-  driver      String
-  driverPhone String
-  /// Index of the last stop the bus cleared; a GPS feed would update this.
-  currentStop Int      @default(0)
+  vehicleId   String?
+  driverId    String?
+  attendantId String?
+  active      Boolean  @default(true)
   updatedAt   DateTime @updatedAt
 
-  stops  RouteStop[]
-  passes BusPass[]
+  vehicle   Vehicle?            @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  driver    TransportCrew?      @relation("RouteDriver", fields: [driverId], references: [id], onDelete: SetNull)
+  attendant TransportCrew?      @relation("RouteAttendant", fields: [attendantId], references: [id], onDelete: SetNull)
+  stops     RouteStop[]
+  passes    BusPass[]
+  requests  TransportRequest[]
+  trips     TransportTrip[]
+  incidents TransportIncident[]
 
   @@map("transport_routes")
 }
@@ -576,8 +627,14 @@ model RouteStop {
   id      String @id @default(cuid())
   routeId String
   name    String
+  /// Scheduled time the bus leaves this stop in the morning, "07:45".
   time    String
   order   Int
+  /// Fare for a term when boarding here, in rupees: farther stops pay more.
+  fare    Int    @default(0)
+
+  passes   BusPass[]
+  requests TransportRequest[]
 
   route TransportRoute @relation(fields: [routeId], references: [id], onDelete: Cascade)
 
@@ -585,16 +642,37 @@ model RouteStop {
   @@map("route_stops")
 }
 
+enum BusPassStatus {
+  PENDING_PAYMENT
+  ACTIVE
+  CANCELLED
+}
+
+/// A student's place on a route, boarding at one stop, for a term. It becomes
+/// valid only once its fee is paid; `valid` mirrors ACTIVE for older readers.
 model BusPass {
-  id        String   @id @default(cuid())
-  studentId String   @unique
-  routeId   String
-  valid     Boolean  @default(true)
-  validTill DateTime
+  id              String        @id @default(cuid())
+  passNo          String        @unique
+  studentId       String        @unique
+  routeId         String
+  stopId          String?
+  term            String?
+  fee             Int           @default(0)
+  /// The fee head charged for this pass, so payment can be matched to it.
+  feeHead         String?
+  status          BusPassStatus @default(PENDING_PAYMENT)
+  valid           Boolean       @default(false)
+  validTill       DateTime
+  issuedAt        DateTime      @default(now())
+  issuedBy        String?
+  cancelledReason String?
 
-  student Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  route   TransportRoute @relation(fields: [routeId], references: [id])
+  student   Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  route     TransportRoute @relation(fields: [routeId], references: [id])
+  stop      RouteStop?     @relation(fields: [stopId], references: [id], onDelete: SetNull)
+  boardings TripBoarding[]
 
+  @@index([routeId, status])
   @@map("bus_passes")
 }
 
@@ -1022,6 +1100,7 @@ enum ReceiptStatus {
   COMPLETE
   PENDING_CLEARANCE
   BOUNCED
+  CANCELLED
 }
 
 /// Money taken across the counter.
@@ -1093,8 +1172,9 @@ model CertificateRequest {
   issuedAt     DateTime?
   rejectReason String?
 
-  student  Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  issuedBy OfficeStaff? @relation("CertificateIssuedBy", fields: [issuedById], references: [id])
+  student  Student             @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  issuedBy OfficeStaff?        @relation("CertificateIssuedBy", fields: [issuedById], references: [id])
+  digital  DigitalCertificate?
 
   @@index([stage, slaDeadline])
   @@index([studentId])
@@ -1255,6 +1335,7 @@ model ExamPaper {
   bundles      AnswerBundle[]
   scripts      AnswerScript[]
   revaluations RevaluationApplication[]
+  malpractice  MalpracticeCase[]
 
   @@unique([sessionId, subjectId])
   @@index([examDate])
@@ -1289,11 +1370,13 @@ model AnswerBundle {
 
   examinerName String?
   examinerRole ExaminerRole @default(E1)
+  examinerId   String?
   assignedAt   DateTime?
   submittedAt  DateTime?
 
-  paper  ExamPaper  @relation(fields: [paperId], references: [id], onDelete: Cascade)
-  centre ExamCentre @relation(fields: [centreId], references: [id])
+  paper    ExamPaper  @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  centre   ExamCentre @relation(fields: [centreId], references: [id])
+  examiner Examiner?  @relation(fields: [examinerId], references: [id])
 
   scripts AnswerScript[]
 
@@ -2145,4 +2228,1165 @@ model DigilockerSession {
 
   @@index([userId])
   @@map("digilocker_sessions")
+}
+
+// ─── Student lifecycle ────────────────────────────────────────────────────────
+
+/// Where a student stands on the rolls. Only ACTIVE students appear on class
+/// rosters; the exits (WITHDRAWN, TRANSFERRED, RUSTICATED) also close the
+/// sign-in, while a GRADUATED student keeps it to read their own record.
+enum StudentStatus {
+  ACTIVE
+  ON_LEAVE
+  SUSPENDED
+  DETAINED
+  WITHDRAWN
+  TRANSFERRED
+  RUSTICATED
+  GRADUATED
+}
+
+enum LifecycleEventKind {
+  ADMITTED
+  PROMOTED
+  DETAINED
+  LEAVE_STARTED
+  RESUMED
+  SUSPENDED
+  REINSTATED
+  WITHDRAWN
+  TRANSFERRED
+  RUSTICATED
+  READMITTED
+  GRADUATED
+  CLEARANCE
+}
+
+/// One entry in a student's history on the rolls. Written in the same
+/// transaction as the change it records, and never edited afterwards.
+model LifecycleEvent {
+  id           String             @id @default(cuid())
+  studentId    String
+  kind         LifecycleEventKind
+  fromStatus   StudentStatus?
+  toStatus     StudentStatus?
+  fromSemester Int?
+  toSemester   Int?
+  term         String?
+  reason       String
+  /// Order, resolution or letter number the decision was taken under.
+  reference    String?
+  effectiveOn  DateTime           @default(now())
+  actorId      String?
+  actorName    String
+  createdAt    DateTime           @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, createdAt])
+  @@index([kind, createdAt])
+  @@map("lifecycle_events")
+}
+
+enum LifecycleRequestKind {
+  BREAK_OF_STUDY
+  RESUME
+  WITHDRAWAL
+  TRANSFER
+}
+
+enum LifecycleRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+/// A student's own application to change their standing — a break in study,
+/// a return, a withdrawal or a transfer — decided by the registrar.
+model LifecycleRequest {
+  id           String                 @id @default(cuid())
+  requestNo    String                 @unique
+  studentId    String
+  kind         LifecycleRequestKind
+  reason       String
+  /// For a transfer, the institution the student is moving to.
+  destination  String?
+  /// For a break in study, when the student expects to return.
+  returnBy     DateTime?
+  status       LifecycleRequestStatus @default(PENDING)
+  decisionNote String?
+  decidedBy    String?
+  decidedAt    DateTime?
+  createdAt    DateTime               @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([studentId])
+  @@map("lifecycle_requests")
+}
+
+/// A department's sign-off on a student leaving: the hostel warden, the
+/// laboratory, the head of department. Fees, library and transport are read
+/// live from their own ledgers; a row here for one of those is a waiver.
+model NoDuesClearance {
+  id         String   @id @default(cuid())
+  studentId  String
+  department String
+  cleared    Boolean  @default(true)
+  remarks    String?
+  clearedBy  String
+  clearedAt  DateTime @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, department])
+  @@map("no_dues_clearances")
+}
+
+// ─── Digital certificates ─────────────────────────────────────────────────────
+
+/// An Ed25519 key the institution signs certificates with. The newest key not
+/// retired signs; every key is kept, so what an older key signed still checks.
+/// The public half is published at /api/verify/keys for anyone to verify with.
+model CertificateSigningKey {
+  /// The key id printed on each certificate it signs.
+  id         String    @id
+  algorithm  String    @default("Ed25519")
+  /// SPKI, PEM.
+  publicKey  String
+  /// PKCS#8, PEM. Null when the key is held outside the database (CERT_SIGNING_KEY).
+  privateKey String?
+  createdAt  DateTime  @default(now())
+  retiredAt  DateTime?
+
+  certificates DigitalCertificate[]
+
+  @@map("certificate_signing_keys")
+}
+
+enum DigitalCertificateStatus {
+  VALID
+  REVOKED
+}
+
+/// A certificate the institution has issued, signed and filed.
+///
+/// What is signed is the canonical payload — everything printed on the
+/// certificate — so changing any word of it, here or on paper, breaks the
+/// signature. The official PDF is rendered once, at issue, and its SHA-256 is
+/// kept, so a copy can be checked byte for byte.
+model DigitalCertificate {
+  id              String                   @id @default(cuid())
+  serialNo        String                   @unique
+  type            String
+  title           String
+  /// The certifying sentence, with the recipient already named.
+  statement       String
+  recipientName   String
+  /// Enrolment number, or an external participant's own reference.
+  recipientRef    String?
+  recipientEmail  String?
+  /// Printed as a table of label and value.
+  fields          Json
+  issuedAt        DateTime                 @default(now())
+  validUntil      DateTime?
+  issuerName      String
+  issuerTitle     String
+  /// The institution as named when it issued; part of what was signed.
+  institutionName String
+  institutionCode String
+  issuedById      String?
+  /// SHA-256 of the canonical payload, hex.
+  payloadHash     String
+  /// Ed25519 over the canonical payload, base64url.
+  signature       String
+  keyId           String
+  fileId          String?                  @unique
+  /// SHA-256 of the official PDF's bytes, hex.
+  pdfHash         String?                  @unique
+  status          DigitalCertificateStatus @default(VALID)
+  revokedAt       DateTime?
+  revokedReason   String?
+  revokedBy       String?
+  /// Certificates issued together (a convocation, an event) share one.
+  batchRef        String?
+  verifications   Int                      @default(0)
+  lastVerifiedAt  DateTime?
+  createdAt       DateTime                 @default(now())
+
+  studentId String?
+  requestId String? @unique
+
+  student Student?              @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  request CertificateRequest?   @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  key     CertificateSigningKey @relation(fields: [keyId], references: [id])
+
+  @@index([studentId])
+  @@index([type, issuedAt])
+  @@index([batchRef])
+  @@map("digital_certificates")
+}
+
+// ─── Hostels ──────────────────────────────────────────────────────────────────
+
+enum HostelGender {
+  BOYS
+  GIRLS
+  CO_ED
+}
+
+enum HostelRoomStatus {
+  AVAILABLE
+  MAINTENANCE
+  BLOCKED
+}
+
+/// A hostel the institution runs. Any number can be added; rooms belong to one.
+model Hostel {
+  id               String       @id @default(cuid())
+  code             String       @unique
+  name             String
+  gender           HostelGender
+  address          String?
+  wardenName       String?
+  wardenPhone      String?
+  /// Facilities of the building: WiFi, gym, reading room, laundry…
+  amenities        String[]
+  rules            String?
+  /// Charged per resident per month when the mess bill is run.
+  messRatePerMonth Int          @default(0)
+  active           Boolean      @default(true)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  rooms        HostelRoom[]
+  applications HostelApplication[]
+  complaints   HostelComplaint[]
+  visitors     HostelVisitor[]
+  menu         HostelMessMenu[]
+  rollCalls    HostelRollCallEntry[]
+  billRuns     HostelBillRun[]
+
+  @@map("hostels")
+}
+
+model HostelRoom {
+  id              String           @id @default(cuid())
+  hostelId        String
+  roomNo          String
+  floor           Int              @default(0)
+  /// Beds in the room; never set below the residents it holds.
+  capacity        Int
+  ac              Boolean          @default(false)
+  attachedBath    Boolean          @default(false)
+  /// Furnishing of this room: bed, wardrobe, study table, fan…
+  amenities       String[]
+  /// Room rent per semester, per bed, in rupees.
+  rentPerSemester Int              @default(0)
+  status          HostelRoomStatus @default(AVAILABLE)
+  notes           String?
+  createdAt       DateTime         @default(now())
+
+  hostel     Hostel             @relation(fields: [hostelId], references: [id], onDelete: Cascade)
+  allotments HostelAllotment[]
+  complaints HostelComplaint[]
+  changeTo   HostelRoomChange[] @relation("RoomChangeTo")
+
+  @@unique([hostelId, roomNo])
+  @@map("hostel_rooms")
+}
+
+enum HostelApplicationStatus {
+  PENDING
+  WAITLISTED
+  ALLOTTED
+  REJECTED
+  CANCELLED
+}
+
+/// A student asking for a hostel place for an academic year.
+model HostelApplication {
+  id                String                  @id @default(cuid())
+  applicationNo     String                  @unique
+  studentId         String
+  academicYear      String
+  preferredHostelId String?
+  /// SINGLE, DOUBLE, TRIPLE or ANY.
+  roomPreference    String                  @default("ANY")
+  distanceKm        Int                     @default(0)
+  /// A medical or disability need the allotment must respect.
+  specialNeeds      String?
+  reason            String
+  /// Worked out at application, from the allotment policy, and stored with it.
+  priorityScore     Int                     @default(0)
+  status            HostelApplicationStatus @default(PENDING)
+  decisionNote      String?
+  decidedBy         String?
+  decidedAt         DateTime?
+  createdAt         DateTime                @default(now())
+
+  student         Student          @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  preferredHostel Hostel?          @relation(fields: [preferredHostelId], references: [id], onDelete: SetNull)
+  allotment       HostelAllotment?
+
+  @@index([status, priorityScore])
+  @@index([studentId])
+  @@map("hostel_applications")
+}
+
+enum HostelAllotmentStatus {
+  ACTIVE
+  VACATED
+}
+
+/// A student in a bed. One active allotment per student and per bed is held
+/// by the database itself (activeStudent and activeBed are unique while
+/// active and cleared on vacating), not by the screens.
+model HostelAllotment {
+  id            String                @id @default(cuid())
+  allotmentNo   String                @unique
+  studentId     String
+  roomId        String
+  bed           String
+  status        HostelAllotmentStatus @default(ACTIVE)
+  activeStudent String?               @unique
+  activeBed     String?               @unique
+  academicYear  String
+  allottedAt    DateTime              @default(now())
+  allottedBy    String
+  checkedInAt   DateTime?
+  vacatedAt     DateTime?
+  vacatedBy     String?
+  vacateReason  String?
+  applicationId String?               @unique
+
+  student     Student            @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  room        HostelRoom         @relation(fields: [roomId], references: [id])
+  application HostelApplication? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  roomChanges HostelRoomChange[]
+
+  @@index([roomId, status])
+  @@index([studentId])
+  @@map("hostel_allotments")
+}
+
+enum HostelRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model HostelRoomChange {
+  id              String              @id @default(cuid())
+  requestNo       String              @unique
+  studentId       String
+  allotmentId     String
+  preferredRoomId String?
+  reason          String
+  status          HostelRequestStatus @default(PENDING)
+  decisionNote    String?
+  decidedBy       String?
+  decidedAt       DateTime?
+  createdAt       DateTime            @default(now())
+
+  student       Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  allotment     HostelAllotment @relation(fields: [allotmentId], references: [id], onDelete: Cascade)
+  preferredRoom HostelRoom?     @relation("RoomChangeTo", fields: [preferredRoomId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@map("hostel_room_changes")
+}
+
+enum HostelComplaintStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum HostelComplaintPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+model HostelComplaint {
+  id          String                  @id @default(cuid())
+  ticketNo    String                  @unique
+  studentId   String
+  hostelId    String
+  roomId      String?
+  category    String
+  priority    HostelComplaintPriority @default(NORMAL)
+  description String
+  status      HostelComplaintStatus   @default(OPEN)
+  assignedTo  String?
+  response    String?
+  /// When the service standard for this priority runs out.
+  dueBy       DateTime
+  resolvedAt  DateTime?
+  /// The student's verdict on the fix: 1–5, with an optional word.
+  rating      Int?
+  feedback    String?
+  reopened    Int                     @default(0)
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+
+  student Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  hostel  Hostel      @relation(fields: [hostelId], references: [id], onDelete: Cascade)
+  room    HostelRoom? @relation(fields: [roomId], references: [id], onDelete: SetNull)
+
+  @@index([hostelId, status])
+  @@index([studentId])
+  @@map("hostel_complaints")
+}
+
+enum HostelLeaveKind {
+  GATE_PASS
+  LEAVE
+}
+
+enum HostelLeaveStatus {
+  AWAITING_PARENT
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  OUT
+  RETURNED
+}
+
+enum ParentConsent {
+  PENDING
+  GIVEN
+  REFUSED
+  NOT_REQUIRED
+}
+
+/// A gate pass (out and back the same day) or a leave (overnight or longer).
+/// The parent consents first when a parent account is linked; the warden
+/// decides; the gate records the student going out and coming back.
+model HostelLeave {
+  id            String            @id @default(cuid())
+  passNo        String            @unique
+  studentId     String
+  kind          HostelLeaveKind
+  leaveFrom     DateTime
+  leaveTo       DateTime
+  destination   String
+  reason        String
+  status        HostelLeaveStatus @default(PENDING)
+  parentConsent ParentConsent     @default(NOT_REQUIRED)
+  parentNote    String?
+  decisionNote  String?
+  decidedBy     String?
+  decidedAt     DateTime?
+  outAt         DateTime?
+  returnedAt    DateTime?
+  createdAt     DateTime          @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([status, leaveTo])
+  @@index([studentId])
+  @@map("hostel_leaves")
+}
+
+model HostelVisitor {
+  id          String    @id @default(cuid())
+  hostelId    String
+  studentId   String
+  visitorName String
+  relation    String
+  phone       String
+  idProof     String?
+  purpose     String
+  inAt        DateTime  @default(now())
+  outAt       DateTime?
+  recordedBy  String
+
+  hostel  Hostel  @relation(fields: [hostelId], references: [id], onDelete: Cascade)
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([hostelId, inAt])
+  @@map("hostel_visitors")
+}
+
+/// The week's menu, one row per hostel and day (0 = Sunday).
+model HostelMessMenu {
+  id        String   @id @default(cuid())
+  hostelId  String
+  day       Int
+  breakfast String
+  lunch     String
+  snacks    String   @default("")
+  dinner    String
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+
+  hostel Hostel @relation(fields: [hostelId], references: [id], onDelete: Cascade)
+
+  @@unique([hostelId, day])
+  @@map("hostel_mess_menu")
+}
+
+enum RollCallStatus {
+  PRESENT
+  ABSENT
+  ON_LEAVE
+}
+
+/// The night roll call: one row per resident per night.
+model HostelRollCallEntry {
+  id        String         @id @default(cuid())
+  hostelId  String
+  studentId String
+  date      String
+  status    RollCallStatus
+  markedBy  String
+  markedAt  DateTime       @default(now())
+
+  hostel  Hostel  @relation(fields: [hostelId], references: [id], onDelete: Cascade)
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([hostelId, studentId, date])
+  @@index([hostelId, date])
+  @@map("hostel_roll_calls")
+}
+
+/// A run of mess or room-rent charges onto residents' fee accounts.
+model HostelBillRun {
+  id        String   @id @default(cuid())
+  hostelId  String
+  kind      String
+  /// "2026-10" for mess, the term for rent.
+  period    String
+  rate      Int?
+  charged   Int
+  skipped   Int
+  total     Int
+  runBy     String
+  createdAt DateTime @default(now())
+
+  hostel Hostel @relation(fields: [hostelId], references: [id], onDelete: Cascade)
+
+  @@unique([hostelId, kind, period])
+  @@map("hostel_bill_runs")
+}
+
+// ─── Transport: fleet, crew, requests, trips, incidents ───────────────────────
+
+enum VehicleStatus {
+  ACTIVE
+  MAINTENANCE
+  RETIRED
+}
+
+/// A vehicle in the fleet, with the papers the RTO requires it to carry.
+model Vehicle {
+  id                 String        @id @default(cuid())
+  regNo              String        @unique
+  /// BUS, MINIBUS or VAN.
+  kind               String        @default("BUS")
+  make               String?
+  /// Seats for students; a route cannot carry more passes than this.
+  capacity           Int
+  /// OWNED or HIRED.
+  ownership          String        @default("OWNED")
+  operator           String?
+  fitnessValidTill   DateTime?
+  insuranceValidTill DateTime?
+  permitValidTill    DateTime?
+  pucValidTill       DateTime?
+  gpsDeviceId        String?
+  odometer           Int           @default(0)
+  status             VehicleStatus @default(ACTIVE)
+  notes              String?
+  createdAt          DateTime      @default(now())
+
+  routes    TransportRoute[]
+  trips     TransportTrip[]
+  logs      VehicleLog[]
+  incidents TransportIncident[]
+
+  @@map("vehicles")
+}
+
+enum CrewRole {
+  DRIVER
+  ATTENDANT
+}
+
+/// A driver or attendant. A driver's licence is checked before every trip.
+model TransportCrew {
+  id               String    @id @default(cuid())
+  name             String
+  phone            String
+  role             CrewRole
+  licenceNo        String?
+  licenceValidTill DateTime?
+  /// Police verification done on, for anyone travelling with students.
+  verifiedOn       DateTime?
+  active           Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+
+  drives  TransportRoute[] @relation("RouteDriver")
+  attends TransportRoute[] @relation("RouteAttendant")
+  trips   TransportTrip[]
+
+  @@map("transport_crew")
+}
+
+enum TransportRequestKind {
+  NEW
+  CHANGE
+}
+
+enum TransportRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+/// A student asking for a pass, or to move to another route or stop.
+model TransportRequest {
+  id           String                 @id @default(cuid())
+  requestNo    String                 @unique
+  studentId    String
+  routeId      String
+  stopId       String
+  term         String
+  kind         TransportRequestKind   @default(NEW)
+  note         String?
+  status       TransportRequestStatus @default(PENDING)
+  decisionNote String?
+  decidedBy    String?
+  decidedAt    DateTime?
+  createdAt    DateTime               @default(now())
+
+  student Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  route   TransportRoute @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  stop    RouteStop      @relation(fields: [stopId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("transport_requests")
+}
+
+enum TripStatus {
+  RUNNING
+  COMPLETED
+  CANCELLED
+}
+
+/// One run of a route on a day: when it left each stop, and who boarded.
+model TransportTrip {
+  id            String     @id @default(cuid())
+  routeId       String
+  date          String
+  /// MORNING (to campus) or EVENING (home).
+  shift         String
+  vehicleId     String?
+  driverId      String?
+  status        TripStatus @default(RUNNING)
+  startedAt     DateTime   @default(now())
+  endedAt       DateTime?
+  odometerStart Int?
+  odometerEnd   Int?
+  /// The last stop the bus left, -1 before the first.
+  lastStop      Int        @default(-1)
+  startedBy     String
+  note          String?
+
+  route     TransportRoute      @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  vehicle   Vehicle?            @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  driver    TransportCrew?      @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  events    TripStopEvent[]
+  boardings TripBoarding[]
+  incidents TransportIncident[]
+
+  @@unique([routeId, date, shift])
+  @@index([status])
+  @@map("transport_trips")
+}
+
+model TripStopEvent {
+  id           String   @id @default(cuid())
+  tripId       String
+  stopOrder    Int
+  stopName     String
+  at           DateTime @default(now())
+  /// Minutes behind (positive) or ahead of the timetable; null where the run has no timetable (evenings).
+  delayMinutes Int?
+
+  trip TransportTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@unique([tripId, stopOrder])
+  @@map("trip_stop_events")
+}
+
+/// A student checked on to the bus by the attendant, by pass number.
+model TripBoarding {
+  id        String   @id @default(cuid())
+  tripId    String
+  studentId String
+  passId    String
+  boardedAt DateTime @default(now())
+  by        String
+
+  trip    TransportTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  student Student       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  pass    BusPass       @relation(fields: [passId], references: [id], onDelete: Cascade)
+
+  @@unique([tripId, studentId])
+  @@map("trip_boardings")
+}
+
+model TransportIncident {
+  id            String    @id @default(cuid())
+  incidentNo    String    @unique
+  routeId       String?
+  vehicleId     String?
+  tripId        String?
+  /// BREAKDOWN, ACCIDENT, DELAY, MISCONDUCT, MEDICAL, OTHER.
+  kind          String
+  /// LOW, MEDIUM, HIGH, CRITICAL.
+  severity      String
+  description   String
+  location      String?
+  occurredAt    DateTime
+  actionTaken   String?
+  status        String    @default("OPEN")
+  reportedBy    String
+  closedBy      String?
+  closedAt      DateTime?
+  ridersAlerted Int       @default(0)
+  createdAt     DateTime  @default(now())
+
+  route   TransportRoute? @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  vehicle Vehicle?        @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  trip    TransportTrip?  @relation(fields: [tripId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@map("transport_incidents")
+}
+
+/// Fuel, servicing, repairs and inspections, with what each cost.
+model VehicleLog {
+  id        String   @id @default(cuid())
+  vehicleId String
+  /// FUEL, SERVICE, REPAIR, INSPECTION, TYRE.
+  kind      String
+  date      DateTime
+  odometer  Int?
+  litres    Float?
+  cost      Int      @default(0)
+  vendor    String?
+  notes     String?
+  by        String
+  createdAt DateTime @default(now())
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleId, date])
+  @@map("vehicle_logs")
+}
+
+// ─── Attendance policy, holidays, leave and condonation ───────────────────────
+
+/// The institution's attendance rules. One row; every percentage, alert and
+/// exam-eligibility check reads it, so the rule is the same on every screen.
+model AttendancePolicy {
+  id                  String   @id @default("default")
+  /// The percentage a student must reach in each subject to sit its exam.
+  threshold           Int      @default(75)
+  /// Below the threshold but at or above this, the principal may condone the shortage.
+  condonationFloor    Int      @default(65)
+  /// Warn the student once a subject falls below this, before they are short.
+  warnBelow           Int      @default(80)
+  lateCountsAsPresent Boolean  @default(true)
+  /// How many days back a student may apply for leave.
+  leaveBackdateDays   Int      @default(15)
+  updatedBy           String?
+  updatedAt           DateTime @updatedAt
+
+  @@map("attendance_policy")
+}
+
+/// A day the institution is closed; roll calls are not expected on it.
+model Holiday {
+  id        String   @id @default(cuid())
+  /// yyyy-mm-dd on the Indian calendar.
+  date      String   @unique
+  name      String
+  createdBy String
+  createdAt DateTime @default(now())
+
+  @@map("holidays")
+}
+
+enum AttendanceLeaveKind {
+  MEDICAL
+  ON_DUTY
+  PERSONAL
+}
+
+enum AttendanceLeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+/// A student's leave from classes: illness, college duty (NSS, sports, an
+/// event), or a personal reason. Approved, it turns absences in its dates
+/// into excused ones — those already marked and any marked later.
+model AttendanceLeave {
+  id           String                @id @default(cuid())
+  leaveNo      String                @unique
+  studentId    String
+  kind         AttendanceLeaveKind
+  /// yyyy-mm-dd, inclusive.
+  fromDate     String
+  toDate       String
+  reason       String
+  proofFileId  String?
+  status       AttendanceLeaveStatus @default(PENDING)
+  decidedBy    String?
+  decidedAt    DateTime?
+  decisionNote String?
+  /// Absences this leave has excused so far.
+  excused      Int                   @default(0)
+  createdAt    DateTime              @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId])
+  @@index([status])
+  @@map("attendance_leaves")
+}
+
+enum CondonationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// Permission to sit the term's exams despite a shortage between the
+/// condonation floor and the threshold, granted by the principal.
+model AttendanceCondonation {
+  id           String            @id @default(cuid())
+  requestNo    String            @unique
+  studentId    String
+  term         String
+  /// The lowest subject percentage when the request was made.
+  percent      Float
+  /// MEDICAL or OTHER.
+  kind         String
+  reason       String
+  proofFileId  String?
+  /// Condonation fee charged on approval, in rupees.
+  fee          Int               @default(0)
+  status       CondonationStatus @default(PENDING)
+  decidedBy    String?
+  decidedAt    DateTime?
+  decisionNote String?
+  createdAt    DateTime          @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, term])
+  @@index([status])
+  @@map("attendance_condonations")
+}
+
+// ─── Timetable: dated changes, rooms, bell schedule ──────────────────────────
+
+enum TimetableChangeKind {
+  CANCEL
+  ROOM
+  SUBSTITUTE
+  EXTRA
+}
+
+/// A change to one dated class, not to the weekly pattern: this Tuesday's
+/// lecture cancelled, moved to another room, taken by a colleague, or an
+/// extra (make-up) class on a day it does not normally meet.
+model TimetableChange {
+  id          String              @id @default(cuid())
+  kind        TimetableChangeKind
+  /// The weekly slot changed; null for an extra class.
+  slotId      String?
+  subjectId   String
+  term        String
+  /// yyyy-mm-dd on the Indian calendar.
+  date        String
+  startTime   String
+  endTime     String
+  room        String
+  /// Who teaches this occurrence: the substitute, or the extra class's lecturer.
+  facultyId   String?
+  faculty     String
+  reason      String
+  /// An extra class held to make up for this cancellation.
+  makeupForId String?
+  createdBy   String
+  createdById String
+  createdAt   DateTime            @default(now())
+
+  slot    TimetableSlot? @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  subject Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@index([date])
+  @@index([slotId, date])
+  @@index([subjectId, date])
+  @@index([facultyId, date])
+  @@map("timetable_changes")
+}
+
+enum RoomKind {
+  CLASSROOM
+  LAB
+  HALL
+  SEMINAR
+  OTHER
+}
+
+/// A teaching room. Timetable slots name rooms by code.
+model Room {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  building  String   @default("")
+  capacity  Int      @default(60)
+  kind      RoomKind @default(CLASSROOM)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("rooms")
+}
+
+/// The institution's bell schedule: the periods classes are timetabled in.
+model BellPeriod {
+  id        String  @id @default(cuid())
+  label     String
+  startTime String  @unique
+  endTime   String
+  isBreak   Boolean @default(false)
+
+  @@map("bell_periods")
+}
+
+// ─── Fee ledger: allocations, structures, concessions, refunds, day close ────
+
+/// Which fee head a ledger entry paid (or credited), and by how much. Lets a
+/// receipt be cancelled exactly, and a statement say what each rupee settled.
+model FeeAllocation {
+  id        String   @id @default(cuid())
+  paymentId String
+  feeItemId String
+  amount    Int
+  createdAt DateTime @default(now())
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  feeItem FeeItem @relation(fields: [feeItemId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+  @@index([feeItemId])
+  @@map("fee_allocations")
+}
+
+/// A programme-semester's fees for a term: the heads and the instalment plan.
+model FeeStructure {
+  id          String    @id @default(cuid())
+  name        String
+  programmeId String
+  semester    Int
+  term        String
+  /// [{ head, category, amount, dueDate }]
+  heads       Json
+  /// [{ percent, dueDate }] — empty for pay-in-full.
+  instalments Json      @default("[]")
+  createdBy   String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  appliedAt   DateTime?
+  appliedTo   Int       @default(0)
+
+  @@unique([programmeId, semester, term])
+  @@map("fee_structures")
+}
+
+enum ConcessionKind {
+  MERIT
+  NEED_BASED
+  SIBLING
+  STAFF_WARD
+  SPORTS
+  SCHOLARSHIP
+  OTHER
+}
+
+enum FeeDecision {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// A concession or waiver on one fee head: asked for by the office, decided
+/// by the registrar or principal, and credited to the head when approved.
+model FeeConcession {
+  id           String         @id @default(cuid())
+  concessionNo String         @unique
+  studentId    String
+  feeItemId    String
+  kind         ConcessionKind
+  amount       Int
+  reason       String
+  proofFileId  String?
+  status       FeeDecision    @default(PENDING)
+  requestedBy  String
+  decidedBy    String?
+  decidedAt    DateTime?
+  decisionNote String?
+  paymentId    String?
+  createdAt    DateTime       @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  feeItem FeeItem @relation(fields: [feeItemId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("fee_concessions")
+}
+
+enum RefundStatus {
+  REQUESTED
+  APPROVED
+  PAID
+  REJECTED
+}
+
+/// Money paid back on a fee head — a caution deposit, a withdrawn admission.
+model FeeRefund {
+  id           String       @id @default(cuid())
+  refundNo     String       @unique
+  studentId    String
+  feeItemId    String
+  amount       Int
+  reason       String
+  status       RefundStatus @default(REQUESTED)
+  requestedBy  String
+  decidedBy    String?
+  decidedAt    DateTime?
+  decisionNote String?
+  payoutMode   String?
+  payoutRef    String?
+  paidBy       String?
+  paidAt       DateTime?
+  paymentId    String?
+  createdAt    DateTime     @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  feeItem FeeItem @relation(fields: [feeItemId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("fee_refunds")
+}
+
+/// The cash book closed for a day: what the counter should hold, what was counted.
+model FeeDayClose {
+  id           String   @id @default(cuid())
+  date         String   @unique
+  expectedCash Int
+  countedCash  Int
+  difference   Int
+  totals       Json
+  remarks      String?
+  closedBy     String
+  closedAt     DateTime @default(now())
+
+  @@map("fee_day_closes")
+}
+
+// ─── Examinations: examiners, malpractice, backlog results ──────────────────
+
+/// An examiner on the university's evaluation panel.
+model Examiner {
+  id          String   @id @default(cuid())
+  name        String
+  designation String
+  institution String
+  subjects    String   @default("")
+  mobile      String?
+  email       String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  bundles AnswerBundle[]
+
+  @@map("examiners")
+}
+
+enum UfmStatus {
+  REPORTED
+  DECIDED
+}
+
+enum UfmDecision {
+  WARNING
+  PAPER_CANCELLED
+  SESSION_CANCELLED
+  DEBARRED
+}
+
+/// An unfair-means (malpractice) case reported from the examination hall.
+model MalpracticeCase {
+  id             String       @id @default(cuid())
+  caseNo         String       @unique
+  sessionId      String
+  paperId        String
+  studentId      String
+  description    String
+  evidenceFileId String?
+  reportedBy     String
+  status         UfmStatus    @default(REPORTED)
+  decision       UfmDecision?
+  decisionNote   String?
+  decidedBy      String?
+  decidedAt      DateTime?
+  createdAt      DateTime     @default(now())
+
+  paper   ExamPaper @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  student Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([paperId, studentId])
+  @@index([sessionId])
+  @@map("malpractice_cases")
+}
+
+/// A backlog paper re-sat in a later sitting: held under embargo with the
+/// sitting's results, and written into the original semester's marksheet
+/// when the sitting is published.
+model BacklogResult {
+  id        String   @id @default(cuid())
+  sessionId String
+  studentId String
+  subjectId String
+  semester  Int
+  internal  Int
+  external  Int
+  total     Int
+  grade     String
+  passed    Boolean
+  applied   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, studentId, subjectId])
+  @@map("backlog_results")
 }

@@ -3,6 +3,10 @@ import { z } from 'zod';
 import { prisma } from '../db.js';
 import { ApiError, asyncHandler, validate, validQuery } from '../lib/http.js';
 import { requireAuth, resolveStudentId } from '../auth/middleware.js';
+import { legacyTransport } from './transport/me.js';
+import { addDays, istDate, nextDateOf, occurrences } from './timetable/calendar.js';
+import { currentTerm } from './faculty/shared.js';
+import { attendancePolicy, attendedStatuses, classesNeeded, classesToSpare, pct } from './attendance/policy.js';
 
 export const studentRouter = Router();
 studentRouter.use(requireAuth);
@@ -49,6 +53,9 @@ studentRouter.get(
       abcTarget: student.abcTarget,
       digilockerLinked: student.digilockerLinked,
       validUpto: student.validUpto,
+      status: student.status,
+      statusSince: student.statusSince,
+      graduatedOn: student.graduatedOn,
       college: student.college,
       programme: student.programme,
     });
@@ -57,60 +64,30 @@ studentRouter.get(
 
 // ─── GET /api/student/attendance ──────────────────────────────────────────────
 
-/** Classes still to attend consecutively before a subject clears the bar. */
-function classesNeeded(present: number, total: number, threshold = ATTENDANCE_THRESHOLD) {
-  if (total > 0 && (present / total) * 100 >= threshold) return 0;
-  const frac = threshold / 100;
-  return Math.max(0, Math.ceil((frac * total - present) / (1 - frac)));
-}
-
 studentRouter.get(
   '/attendance',
   asyncHandler(async (req, res) => {
     const id = await resolveStudentId(req);
+    const policy = await attendancePolicy();
+    const counted = new Set<string>(attendedStatuses(policy));
 
-    const enrolments = await prisma.enrolment.findMany({
-      where: { studentId: id },
-      include: { subject: true },
-      orderBy: { subject: { code: 'asc' } },
-    });
-
-    const subjectIds = enrolments.map((e) => e.subjectId);
-
-    // Two round trips regardless of how many subjects the student takes:
-    // every session held, and this student's attended session ids.
-    // Sessions are keyed by their date on the Indian calendar; one dated today
-    // has been held (or is being held) even before 05:30 IST.
-    const ist = new Date(Date.now() + 330 * 60_000);
-    const heldBy = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate());
-
-    const [sessions, attended] = await Promise.all([
-      prisma.classSession.findMany({
-        where: { subjectId: { in: subjectIds } },
-        select: { id: true, subjectId: true, date: true, startTime: true, endTime: true },
-      }),
+    const [enrolments, records] = await Promise.all([
+      prisma.enrolment.findMany({ where: { studentId: id }, include: { subject: true }, orderBy: { subject: { code: 'asc' } } }),
+      // Only submitted roll calls count; a draft or an open QR window is not yet a class held.
       prisma.attendanceRecord.findMany({
-        where: { studentId: id },
-        select: { sessionId: true, status: true },
+        where: { studentId: id, session: { markedAt: { not: null } } },
+        select: { status: true, source: true, session: { select: { id: true, subjectId: true, date: true, startTime: true, endTime: true } } },
+        orderBy: [{ session: { date: 'desc' } }, { session: { startTime: 'desc' } }],
       }),
     ]);
 
-    const marks = new Map(attended.map((a) => [a.sessionId, a.status]));
-    const attendedSessionIds = new Set(attended.filter((a) => a.status !== 'ABSENT').map((a) => a.sessionId));
-    const heldBySubject = new Map<string, number>();
-    const presentBySubject = new Map<string, number>();
-
-    for (const s of sessions) {
-      heldBySubject.set(s.subjectId, (heldBySubject.get(s.subjectId) ?? 0) + 1);
-      if (attendedSessionIds.has(s.id)) {
-        presentBySubject.set(s.subjectId, (presentBySubject.get(s.subjectId) ?? 0) + 1);
-      }
-    }
-
-    const subjects = enrolments.map((e) => {
-      const total = heldBySubject.get(e.subjectId) ?? 0;
-      const present = presentBySubject.get(e.subjectId) ?? 0;
-      const percent = total === 0 ? 0 : (present / total) * 100;
+    // One row per subject, even where a subject is enrolled in more than one term.
+    const seen = new Set<string>();
+    const subjects = enrolments.filter((e) => !seen.has(e.subjectId) && seen.add(e.subjectId)).map((e) => {
+      const mine = records.filter((r) => r.session.subjectId === e.subjectId);
+      const total = mine.length;
+      const present = mine.filter((r) => counted.has(r.status)).length;
+      const percent = pct(present, total);
       return {
         code: e.subject.code,
         name: e.subject.name,
@@ -119,23 +96,17 @@ studentRouter.get(
         room: e.room,
         total,
         present,
-        percent: Number(percent.toFixed(1)),
-        meetsThreshold: percent >= ATTENDANCE_THRESHOLD,
-        classesNeeded: classesNeeded(present, total),
+        late: mine.filter((r) => r.status === 'LATE').length,
+        excused: mine.filter((r) => r.status === 'EXCUSED').length,
+        percent,
+        meetsThreshold: total === 0 || percent >= policy.threshold,
+        warning: total > 0 && percent >= policy.threshold && percent < policy.warnBelow,
+        classesNeeded: classesNeeded(present, total, policy.threshold),
+        canMiss: classesToSpare(present, total, policy.threshold),
         // The last ten classes held, oldest first, with this student's mark.
-        recent: sessions
-          .filter((x) => x.subjectId === e.subjectId && x.date.getTime() <= heldBy)
-          .sort((a, b) => b.date.getTime() - a.date.getTime())
-          .slice(0, 10)
-          .reverse()
-          .map((x) => ({ sessionId: x.id, date: x.date, status: marks.get(x.id) ?? 'ABSENT' })),
-        // Classes this student is not marked present for, newest first, so a
-        // wrong mark can be disputed against the exact class.
-        missed: sessions
-          .filter((x) => x.subjectId === e.subjectId && !attendedSessionIds.has(x.id) && x.date.getTime() <= heldBy)
-          .sort((a, b) => b.date.getTime() - a.date.getTime())
-          .slice(0, 30)
-          .map((x) => ({ sessionId: x.id, date: x.date, time: `${x.startTime}–${x.endTime}` })),
+        recent: mine.slice(0, 10).reverse().map((r) => ({ sessionId: r.session.id, date: r.session.date, status: r.status })),
+        // Classes marked absent, newest first, so a wrong mark can be disputed against the exact class.
+        missed: mine.filter((r) => r.status === 'ABSENT').slice(0, 30).map((r) => ({ sessionId: r.session.id, date: r.session.date, time: `${r.session.startTime}–${r.session.endTime}` })),
       };
     });
 
@@ -143,12 +114,9 @@ studentRouter.get(
     const totalPresent = subjects.reduce((a, s) => a + s.present, 0);
 
     res.json({
-      threshold: ATTENDANCE_THRESHOLD,
-      overall: {
-        present: totalPresent,
-        total: totalHeld,
-        percent: totalHeld === 0 ? 0 : Number(((totalPresent / totalHeld) * 100).toFixed(1)),
-      },
+      threshold: policy.threshold,
+      policy: { threshold: policy.threshold, condonationFloor: policy.condonationFloor, warnBelow: policy.warnBelow, lateCountsAsPresent: policy.lateCountsAsPresent },
+      overall: { present: totalPresent, total: totalHeld, percent: pct(totalPresent, totalHeld) },
       subjects,
     });
   }),
@@ -193,13 +161,16 @@ studentRouter.get(
     const id = await resolveStudentId(req);
     const { day } = validQuery<{ day?: (typeof DAYS)[number] }>(req);
 
+    // This term's subjects only: last semester's classes are not this week's.
+    const term = await currentTerm();
     const enrolments = await prisma.enrolment.findMany({
-      where: { studentId: id },
+      where: { studentId: id, term },
       select: { subjectId: true },
     });
 
     const slots = await prisma.timetableSlot.findMany({
       where: {
+        term,
         subjectId: { in: enrolments.map((e) => e.subjectId) },
         ...(day ? { day } : {}),
       },
@@ -207,20 +178,29 @@ studentRouter.get(
       orderBy: [{ day: 'asc' }, { startTime: 'asc' }],
     });
 
-    const shaped = slots.map((s) => ({
-      id: s.id,
-      day: s.day,
-      time: `${s.startTime}–${s.endTime}`,
-      startTime: s.startTime,
-      endTime: s.endTime,
-      subject: s.subject.name,
-      code: s.subject.code,
-      faculty: s.faculty,
-      room: s.room,
-      cancelled: s.cancelled,
-      cancelReason: s.cancelReason,
-      cancelledAt: s.cancelledAt,
-    }));
+    // Each weekly class as its next meeting stands: cancelled, moved, or taken by a substitute.
+    const ahead = await occurrences({ from: istDate(), to: addDays(istDate(), 7), subjectIds: enrolments.map((e) => e.subjectId), term });
+    const shaped = slots.map((s) => {
+      const next = ahead.find((o) => o.slotId === s.id && o.date === nextDateOf(s.day, s.endTime));
+      const off = s.cancelled || (next ? next.status !== 'SCHEDULED' : false);
+      return {
+        id: s.id,
+        day: s.day,
+        date: next?.date ?? null,
+        time: `${s.startTime}–${s.endTime}`,
+        startTime: s.startTime,
+        endTime: s.endTime,
+        subject: s.subject.name,
+        code: s.subject.code,
+        faculty: next?.faculty ?? s.faculty,
+        room: next?.room ?? s.room,
+        cancelled: off,
+        cancelReason: s.cancelled ? s.cancelReason : off ? (next?.note ?? null) : null,
+        cancelledAt: s.cancelledAt,
+        substitute: !!next?.substitute,
+        roomChanged: !!next?.roomChange,
+      };
+    });
 
     if (day) {
       res.json({ day, slots: shaped });
@@ -338,29 +318,6 @@ studentRouter.get(
 studentRouter.get(
   '/transport',
   asyncHandler(async (req, res) => {
-    const id = await resolveStudentId(req);
-
-    const pass = await prisma.busPass.findUnique({
-      where: { studentId: id },
-      include: { route: { include: { stops: { orderBy: { order: 'asc' } } } } },
-    });
-
-    if (!pass) {
-      res.json(null);
-      return;
-    }
-
-    res.json({
-      routeNo: pass.route.routeNo,
-      name: pass.route.name,
-      busNo: pass.route.busNo,
-      driver: pass.route.driver,
-      driverPhone: pass.route.driverPhone,
-      currentStop: pass.route.currentStop,
-      lastUpdated: pass.route.updatedAt,
-      passValid: pass.valid,
-      passDue: pass.validTill,
-      stops: pass.route.stops.map((s) => ({ name: s.name, time: s.time })),
-    });
+    res.json(await legacyTransport(await resolveStudentId(req)));
   }),
 );

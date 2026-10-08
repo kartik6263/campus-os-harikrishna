@@ -8,6 +8,7 @@ import EligibilityEngine from './backoffice/EligibilityEngine';
 import CentreAllocation from './backoffice/CentreAllocation';
 import Confidential from './backoffice/Confidential';
 import Evaluation from './backoffice/Evaluation';
+import ExamConduct from './backoffice/ExamConduct';
 import ResultProcessing from './backoffice/ResultProcessing';
 import RevaluationDegree from './backoffice/RevaluationDegree';
 import { inst, instPlace } from '../lib/institution';
@@ -16,7 +17,7 @@ interface Props { onNavigate: (s: Screen) => void }
 
 type Module =
   | 'exam-setup' | 'eligibility' | 'centre-alloc' | 'confidential'
-  | 'evaluation' | 'results' | 'revaluation';
+  | 'conduct' | 'evaluation' | 'results' | 'revaluation';
 
 interface NavGroup {
   label: string;
@@ -31,6 +32,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: 'eligibility', label: 'Eligibility & Scrutiny' },
       { id: 'centre-alloc', label: 'Centres & Hall Tickets' },
       { id: 'confidential', label: 'Confidential Section', restricted: true },
+      { id: 'conduct', label: 'Hall Attendance & UFM' },
       { id: 'evaluation', label: 'Evaluation & Moderation' },
       { id: 'results', label: 'Result Processing' },
       { id: 'revaluation', label: 'Revaluation & Degrees' },
@@ -43,6 +45,7 @@ const MODULE_LABELS: Record<Module, string> = {
   'eligibility': 'Eligibility & Form Scrutiny',
   'centre-alloc': 'Centres & Hall Tickets',
   'confidential': 'Confidential Section',
+  'conduct': 'Conduct of Examination',
   'evaluation': 'Evaluation & Moderation',
   'results': 'Result Processing',
   'revaluation': 'Revaluation & Degrees',
@@ -132,6 +135,7 @@ export default function AcademicBackOffice({ onNavigate }: Props) {
           {module === 'eligibility' && <EligibilityEngine {...pass} />}
           {module === 'centre-alloc' && <CentreAllocation {...pass} />}
           {module === 'confidential' && <Confidential {...pass} />}
+          {module === 'conduct' && <ExamConduct {...pass} />}
           {module === 'evaluation' && <Evaluation {...pass} />}
           {module === 'results' && <ResultProcessing {...pass} />}
           {module === 'revaluation' && <RevaluationDegree {...pass} />}

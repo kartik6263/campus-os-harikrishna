@@ -1,6 +1,6 @@
 import { prisma } from '../../db.js';
 import { overallAttendance } from '../faculty/shared.js';
-import { ATTENDANCE_THRESHOLD } from '../student.js';
+import { currentPolicy } from '../attendance/policy.js';
 
 /**
  * The risk model.
@@ -121,13 +121,13 @@ export async function assess(studentIds: string[]): Promise<Map<string, Assessme
     } else {
       // Linear from the threshold down to the debarment line, so a student
       // just under the bar is not treated like one who has stopped coming.
-      const shortfall = Math.max(0, ATTENDANCE_THRESHOLD - percent);
-      const span = ATTENDANCE_THRESHOLD - DEBARMENT_LINE;
+      const shortfall = Math.max(0, currentPolicy().threshold - percent);
+      const span = currentPolicy().threshold - DEBARMENT_LINE;
       const severity = Math.min(1, shortfall / span);
       factors.push({
         factor: 'Attendance',
         value: `${percent}% of ${held} classes`,
-        direction: percent < ATTENDANCE_THRESHOLD ? 'negative' : 'positive',
+        direction: percent < currentPolicy().threshold ? 'negative' : 'positive',
         weight: WEIGHTS.attendance,
         contribution: Math.round(severity * WEIGHTS.attendance * 100),
       });

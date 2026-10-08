@@ -4,6 +4,7 @@ import { Modal, Button, Input, Select, toast, ToastContainer } from '../../compo
 import { api } from '../../lib/api';
 import { useRiskList } from '../../lib/intelligencequeries';
 import { useCollection, openMaterial } from '../../lib/records';
+import StudyPlanCard from '../../components/StudyPlanCard';
 
 interface Resource { id: string; kind: string; title: string; source: string; type: string; url: string | null; size: string | null }
 interface Plan {
@@ -116,6 +117,12 @@ export default function LearningRecommendations() {
                 ))}
                 {plan.data.subjects.length === 0 && <span className="text-[13px] text-white/50">No enrolled subjects with classes or marks yet.</span>}
               </div>
+
+              {plan.data.plan.length > 0 && (
+                <div className="mb-6">
+                  <StudyPlanCard key={chosen} studentId={chosen} done={done} onToggle={toggle} />
+                </div>
+              )}
 
               {plan.data.plan.map(p => (
                 <section key={p.subject.code} className="mb-6">

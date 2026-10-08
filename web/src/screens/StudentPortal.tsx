@@ -341,14 +341,14 @@ function AIChatWidget({ onClose }: { onClose: () => void }) {
           {voice.error && <p className="text-[11px] text-red-300 mb-1.5">{voice.error}</p>}
           <div className="flex gap-2">
             <input
-              value={voice.listening ? voice.interim : inputVal}
+              value={(voice.listening || voice.transcribing) ? voice.interim : inputVal}
               onChange={e => setInputVal(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && void handleSend()}
               placeholder={voice.listening ? 'Listening…' : lang === 'hi' ? 'अपना सवाल लिखें...' : 'Ask your question...'}
               className="flex-1 px-3 py-2 bg-[#0D1B35] border border-white/10 rounded-lg text-white text-[13px] placeholder-white/30 outline-none focus:border-[#7C3AED] transition-colors"
             />
             {voice.supported && (
-              <button onClick={() => (voice.listening ? voice.stop() : voice.start())} aria-label="Speak"
+              <button onClick={() => (voice.listening ? voice.stop() : voice.start())} disabled={voice.transcribing} aria-label="Speak"
                 className={`w-9 h-9 rounded-lg flex items-center justify-center cursor-pointer ${voice.listening ? 'bg-red-500 animate-pulse' : 'bg-white/10 hover:bg-white/20'}`}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10a7 7 0 0 0 14 0M12 17v5" /></svg>
               </button>

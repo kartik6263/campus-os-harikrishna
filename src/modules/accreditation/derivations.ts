@@ -1,6 +1,6 @@
 import { prisma } from '../../db.js';
 import { overallAttendance } from '../faculty/shared.js';
-import { ATTENDANCE_THRESHOLD } from '../student.js';
+import { currentPolicy } from '../attendance/policy.js';
 
 /**
  * What a derived metric answers with.
@@ -166,13 +166,13 @@ export const DERIVATIONS: Record<string, Derivation> = {
     const students = await prisma.student.findMany({ where: { collegeId }, select: { id: true } });
     const attendance = await overallAttendance(students.map((s) => s.id));
     const values = [...attendance.values()].map((a) => a.percent).filter((p) => p > 0);
-    const meeting = values.filter((p) => p >= ATTENDANCE_THRESHOLD).length;
+    const meeting = values.filter((p) => p >= currentPolicy().threshold).length;
     const p = pct(meeting, values.length);
 
     return {
       value: `${p}%`,
       numeric: p,
-      basis: `${meeting} of ${values.length} students at or above the ${ATTENDANCE_THRESHOLD}% threshold`,
+      basis: `${meeting} of ${values.length} students at or above the ${currentPolicy().threshold}% threshold`,
     };
   },
 

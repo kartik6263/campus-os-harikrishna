@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { ToastContainer } from '../../components/ui';
+import { toast, ToastContainer } from '../../components/ui';
+import { sourceLabel, usePerformanceBrief } from '../../lib/ai';
 import {
   useCohort,
   useProjection,
@@ -175,7 +176,51 @@ function StudentDetailPanel({ student, onClose }: { student: ApiProjectionRow; o
             </div>
           </div>
         )}
+
+        <Coach key={student.studentId} studentId={student.studentId} />
       </div>
+    </div>
+  );
+}
+
+const STATUS_STYLE = { strong: 'text-green-400', steady: 'text-blue-300', 'at risk': 'text-red-400' } as const;
+
+/** Gemini reads the projection like a performance coach: outlook, per-subject advice, targets. */
+function Coach({ studentId }: { studentId: string }) {
+  const coach = usePerformanceBrief(studentId);
+  const d = coach.data;
+  const run = (refresh: boolean) => coach.mutate(refresh, { onError: (e) => toast.error(e instanceof Error ? e.message : 'Could not draft the coaching notes') });
+  return (
+    <div className="rounded-xl p-4 border border-[#7C3AED]/50 bg-gradient-to-br from-[#1E1050]/60 to-[#0D1B35]">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="text-[12px] font-semibold text-purple-200">✦ AI performance coach</div>
+        {d && <span className="text-[10px] text-purple-300/70">{sourceLabel(d)}</span>}
+      </div>
+      {!d && !coach.isPending && (
+        <>
+          <p className="text-[12px] text-gray-400 mb-3">Reads this projection subject by subject and sets measurable targets for the rest of the term. The student's name is not sent.</p>
+          <button onClick={() => run(false)} className="w-full py-2 rounded-lg bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-[13px] font-medium cursor-pointer">Coach this student</button>
+        </>
+      )}
+      {coach.isPending && <div className="text-[13px] text-purple-200 flex items-center gap-2 py-2"><span className="w-4 h-4 border-2 border-purple-300/30 border-t-purple-200 rounded-full animate-spin" /> Reading the marks…</div>}
+      {coach.isError && !coach.isPending && <p className="text-[12px] text-red-300 mt-2">{coach.error instanceof Error ? coach.error.message : 'Failed'}</p>}
+      {d && !coach.isPending && (
+        <div className="flex flex-col gap-3 text-[13px]">
+          {d.notice && <p className="text-[11px] text-amber-300/90">{d.notice}</p>}
+          <p className="text-gray-100">{d.data.outlook}</p>
+          <div className="flex flex-col gap-1.5">
+            {d.data.subjects.map((s, i) => (
+              <p key={i} className="text-[12px] text-gray-300"><span className={`font-medium ${STATUS_STYLE[s.status]}`}>{s.subject} · {s.status}</span> — {s.advice}</p>
+            ))}
+          </div>
+          <div>
+            <div className="text-[11px] text-gray-500 uppercase tracking-wide mb-1">Targets for the term</div>
+            <ul className="text-[12px] text-gray-200 flex flex-col gap-1">{d.data.targets.map((t, i) => <li key={i}>◎ {t}</li>)}</ul>
+          </div>
+          <p className="text-[12px] text-gray-400"><span className="text-gray-500 uppercase tracking-wide text-[11px]">For teachers:</span> {d.data.teacherNote}</p>
+          <button onClick={() => run(true)} className="self-start text-[11px] text-purple-300 hover:text-white cursor-pointer">↻ Coach again</button>
+        </div>
+      )}
     </div>
   );
 }

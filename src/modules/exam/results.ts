@@ -12,6 +12,8 @@ import {
   requireStatus,
   resolveExamStaffId,
 } from './shared.js';
+import { recomputeStanding } from './standing.js';
+import { settleFeeHead } from '../fees.js';
 
 export const resultsRouter = Router();
 
@@ -124,6 +126,17 @@ resultsRouter.post(
     });
     const semesterOf = new Map(students.map((s) => [s.id, s.semester]));
 
+    // Unfair-means decisions: a cancelled paper, or a cancelled sitting, is failed outright.
+    const ufm = await prisma.malpracticeCase.findMany({ where: { sessionId: id, status: 'DECIDED' }, select: { studentId: true, paperId: true, decision: true } });
+    const cancelled = (studentId: string, paperId: string) => ufm.some((c) => c.studentId === studentId && (c.decision === 'SESSION_CANCELLED' || c.decision === 'DEBARRED' || (c.decision === 'PAPER_CANCELLED' && c.paperId === paperId)));
+
+    // A backlog paper keeps the internal marks of the semester it belongs to.
+    const priorRows = await prisma.subjectResult.findMany({
+      where: { subjectId: { in: subjectIds }, result: { studentId: { in: studentIds }, published: true } },
+      select: { subjectId: true, internal: true, passed: true, result: { select: { studentId: true, semester: true } } },
+    });
+    let backlogs = 0;
+
     let processed = 0;
     let passed = 0;
     let graced = 0;
@@ -132,9 +145,25 @@ resultsRouter.post(
       async (tx) => {
         // Replace, do not duplicate: a re-run is the corrected answer.
         await tx.semesterResult.deleteMany({ where: { sessionId: id } });
+        await tx.backlogResult.deleteMany({ where: { sessionId: id, applied: false } });
 
         for (const studentId of studentIds) {
-          const own = scriptsByStudent.get(studentId) ?? [];
+          const all = scriptsByStudent.get(studentId) ?? [];
+          const current = semesterOf.get(studentId);
+          // Papers of an earlier semester are backlogs: they go back to that semester's marksheet on publication.
+          const own = all.filter((s) => paperById.get(s.paperId)!.subject.semester === current || !priorRows.some((p) => p.result.studentId === studentId && p.subjectId === paperById.get(s.paperId)!.subjectId && !p.passed));
+          for (const s of all.filter((x) => !own.includes(x))) {
+            const paper = paperById.get(s.paperId)!;
+            const prior = priorRows.find((p) => p.result.studentId === studentId && p.subjectId === paper.subjectId && !p.passed)!;
+            const external = s.absent || cancelled(studentId, s.paperId) ? 0 : (s.finalMark ?? 0);
+            const maxTotal = paper.maxExternal + paper.maxInternal;
+            const total = prior.internal + external;
+            const passedNow = !s.absent && !cancelled(studentId, s.paperId) && (total / maxTotal) * 100 >= PASS_PERCENT;
+            await tx.backlogResult.create({
+              data: { sessionId: id, studentId, subjectId: paper.subjectId, semester: prior.result.semester, internal: prior.internal, external, total, grade: passedNow ? gradeFor(total, maxTotal).grade : 'F', passed: passedNow },
+            });
+            backlogs += 1;
+          }
 
           const rows = own.map((s) => {
             const paper = paperById.get(s.paperId)!;
@@ -142,10 +171,12 @@ resultsRouter.post(
             const internalMark = internal
               ? scaleInternal(internal.scored, internal.max, paper.maxInternal)
               : 0;
-            const external = s.absent ? 0 : (s.finalMark ?? 0);
+            const voided = cancelled(studentId, s.paperId);
+            const external = s.absent || voided ? 0 : (s.finalMark ?? 0);
             const maxTotal = paper.maxExternal + paper.maxInternal;
 
             return {
+              voided,
               subjectId: paper.subjectId,
               code: paper.subject.code,
               credits: paper.subject.credits,
@@ -160,20 +191,20 @@ resultsRouter.post(
           if (rows.length === 0) continue;
 
           const grace = withGrace
-            ? applyGrace(rows.filter((r) => !r.absent).map((r) => ({ code: r.code, total: r.total, maxTotal: r.maxTotal })))
+            ? applyGrace(rows.filter((r) => !r.absent && !r.voided).map((r) => ({ code: r.code, total: r.total, maxTotal: r.maxTotal })))
             : new Map<string, number>();
 
           const finalRows = rows.map((r) => {
             const given = grace.get(r.code) ?? 0;
             const total = r.total + given;
-            const { grade, points } = gradeFor(total, r.maxTotal);
+            const { grade, points } = r.voided ? { grade: 'F', points: 0 } : gradeFor(total, r.maxTotal);
             return {
               ...r,
               graceGiven: given,
               total,
               grade,
               points,
-              passed: !r.absent && (total / r.maxTotal) * 100 >= PASS_PERCENT,
+              passed: !r.absent && !r.voided && (total / r.maxTotal) * 100 >= PASS_PERCENT,
             };
           });
 
@@ -244,6 +275,7 @@ resultsRouter.post(
       graced,
       passPercent: processed === 0 ? 0 : Number(((passed / processed) * 100).toFixed(1)),
       graceRules: GRACE,
+      backlogs,
       embargoed: true,
       note: 'Results are computed but not visible until the session is published.',
     });
@@ -331,6 +363,13 @@ resultsRouter.get(
     await resolveExamStaffId(req);
     const status = typeof req.query.status === 'string' ? req.query.status : undefined;
 
+    // A fee paid on the student's fee account (online or at the counter) starts the re-reading by itself.
+    const waiting = await prisma.revaluationApplication.findMany({ where: { feePaid: false, status: 'APPLIED' }, select: { id: true, studentId: true, applicationNo: true } });
+    for (const w of waiting) {
+      const item = await prisma.feeItem.findFirst({ where: { studentId: w.studentId, head: { startsWith: `Revaluation fee — ${w.applicationNo}` } }, select: { amount: true, paid: true } });
+      if (item && item.paid >= item.amount) await prisma.revaluationApplication.update({ where: { id: w.id }, data: { feePaid: true, status: 'UNDER_REVALUATION' } });
+    }
+
     const applications = await prisma.revaluationApplication.findMany({
       where: status ? { status: status as 'APPLIED' } : {},
       include: {
@@ -376,6 +415,8 @@ resultsRouter.post(
     const application = await prisma.revaluationApplication.findUnique({ where: { id } });
     if (!application) throw ApiError.notFound("No such revaluation application");
     if (application.feePaid) throw ApiError.conflict("That fee is already marked paid");
+    // Taken at the examination office: settle it on the student's fee account, so the ledger agrees.
+    await settleFeeHead(application.studentId, `Revaluation fee — ${application.applicationNo}`, 'EXAM_OFFICE');
 
     const updated = await prisma.revaluationApplication.update({
       where: { id },
@@ -469,6 +510,8 @@ resultsRouter.post(
           passed: (total / maxTotal) * 100 >= PASS_PERCENT,
         },
       });
+      // SGPA, outcome and CGPA follow the changed mark.
+      await recomputeStanding(tx, application.studentId, result.semester);
 
       await tx.notification.create({
         data: {

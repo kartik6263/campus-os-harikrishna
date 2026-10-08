@@ -86,7 +86,7 @@ marksRouter.get(
 
     const [enrolments, entries] = await Promise.all([
       prisma.enrolment.findMany({
-        where: { subjectId: assignment.subjectId, term: assignment.term },
+        where: { subjectId: assignment.subjectId, term: assignment.term, student: { status: 'ACTIVE' } },
         include: { student: { select: { id: true, rollNo: true, enrolmentNo: true, name: true } } },
         orderBy: { student: { rollNo: 'asc' } },
       }),
@@ -205,6 +205,7 @@ marksRouter.put(
       where: {
         subjectId: assignment.subjectId,
         term: assignment.term,
+        student: { status: 'ACTIVE' },
         studentId: { in: [...new Set(entries.map((e) => e.studentId))] },
       },
       select: { studentId: true },
@@ -256,7 +257,7 @@ marksRouter.post(
 
     const [enrolments, entries] = await Promise.all([
       prisma.enrolment.findMany({
-        where: { subjectId: assignment.subjectId, term: assignment.term },
+        where: { subjectId: assignment.subjectId, term: assignment.term, student: { status: 'ACTIVE' } },
         include: { student: { select: { rollNo: true, name: true } } },
       }),
       prisma.markEntry.findMany({

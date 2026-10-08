@@ -6,6 +6,7 @@ import { api, ApiError } from '../../lib/api';
 import { useAttendance, useStudentRecord, type AttendanceSubject } from '../../lib/queries';
 import { downloadStoredFile, pickAndUpload, type StoredFileInfo } from '../../lib/records';
 import { downloadPdf } from '../../lib/export';
+import { CondonationSection, LeaveSection } from '../../components/AttendanceLeave';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 interface Props { onNavigate: (m: any) => void }
@@ -172,11 +173,12 @@ export default function AttendanceModule(_props: Props) {
                 <span className="text-[13px] font-semibold text-[#16264A]">{s.name}</span>
                 <span className="text-[12px] font-bold" style={{ color: pctColor(s.percent, t) }}>{s.total === 0 ? '—' : `${s.percent}%`}</span>
               </div>
-              <p className="text-[11px] text-[#5A6577] mt-0.5"><span className="font-mono">{s.code}</span> · {s.faculty} · {s.present}/{s.total} classes</p>
+              <p className="text-[11px] text-[#5A6577] mt-0.5"><span className="font-mono">{s.code}</span> · {s.faculty} · {s.present}/{s.total} classes{s.excused ? ` · ${s.excused} excused` : ''}{s.late ? ` · ${s.late} late` : ''}</p>
               <div className="h-1.5 mt-2 bg-[#EDEFF3] rounded-[2px] overflow-hidden"><div className="h-full" style={{ width: `${s.percent}%`, background: pctColor(s.percent, t) }} /></div>
             </button>
             {isOpen && (
               <div className="bg-[#FAFBFC] border-b border-[#D3D8E0] px-4 py-3 space-y-3">
+                {s.warning && <InlineAlert type="warning">Close to the line: below {data.policy?.warnBelow ?? t}% in this subject. A few more absences and you fall under {t}%.</InlineAlert>}
                 {s.total === 0
                   ? <InlineAlert type="info">No class has been held in this subject yet.</InlineAlert>
                   : m.mustAttend > 0
@@ -194,7 +196,7 @@ export default function AttendanceModule(_props: Props) {
                       ))}
                     </div>
                   )}
-                  <p className="text-[11px] text-[#5A6577] mt-2">P present · A absent · L late · E excused</p>
+                  <p className="text-[11px] text-[#5A6577] mt-2">P present · A absent · L late{data.policy && !data.policy.lateCountsAsPresent ? ' (not counted as attended)' : ''} · E excused (approved leave)</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button variant="secondary" size="sm" disabled={s.total === 0} onClick={() => setHistoryOf(s.code)}>Full register</Button>
@@ -207,6 +209,9 @@ export default function AttendanceModule(_props: Props) {
           </div>
         );
       })}
+
+      <CondonationSection />
+      <LeaveSection />
 
       {(corrections.data ?? []).length > 0 && (
         <>
@@ -263,7 +268,7 @@ export default function AttendanceModule(_props: Props) {
                     <td className="px-4 py-2 text-[#16264A]">{long(r.date)}</td>
                     <td className="px-4 py-2 text-[#5A6577]">{r.time}</td>
                     <td className="px-4 py-2"><span className="px-2 py-0.5 rounded-[2px] text-[11px] font-semibold" style={{ background: MARK[r.status].bg, color: MARK[r.status].fg }}>{MARK[r.status].label}</span></td>
-                    <td className="px-4 py-2 text-[12px] text-[#5A6577]">{r.source ? SOURCE[r.source] ?? r.source : 'Not marked'}</td>
+                    <td className="px-4 py-2 text-[12px] text-[#5A6577]">{r.source ? (r.source.startsWith('LEAVE:') ? `Leave ${r.source.slice(6)}` : SOURCE[r.source] ?? r.source) : 'Not marked'}</td>
                     <td className="px-4 py-2 text-right">
                       {r.dispute
                         ? <span className="text-[11px] text-[#5A6577]">Dispute {r.dispute.toLowerCase()}</span>

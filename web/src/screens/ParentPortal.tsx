@@ -11,13 +11,15 @@ import ParentFee from './parent/ParentFee';
 import ParentResults from './parent/ParentResults';
 import ParentAnnouncements from './parent/ParentAnnouncements';
 import ParentGatePass from './parent/ParentGatePass';
+import ParentTransport from './parent/ParentTransport';
+import ParentTimetable from './parent/ParentTimetable';
 import ParentMessaging from './parent/ParentMessaging';
 import ParentVerification from './parent/ParentVerification';
 import { inst } from '../lib/institution';
 
 interface Props { onNavigate: (s: Screen) => void }
 
-type Module = 'dashboard' | 'attendance' | 'fee' | 'results' | 'announcements' | 'gate-pass' | 'messaging' | 'verification' | 'more';
+type Module = 'dashboard' | 'attendance' | 'fee' | 'results' | 'announcements' | 'gate-pass' | 'transport' | 'timetable' | 'messaging' | 'verification' | 'more';
 
 const BOTTOM_NAV: Array<{ id: Module; labelHi: string; label: string; icon: string }> = [
   { id: 'dashboard', label: 'Home', labelHi: 'होम', icon: '🏠' },
@@ -29,7 +31,9 @@ const BOTTOM_NAV: Array<{ id: Module; labelHi: string; label: string; icon: stri
 
 const MORE_ITEMS: Array<{ id: Module; label: string; labelHi: string; icon: string }> = [
   { id: 'announcements', label: 'Announcements', labelHi: 'सूचनाएं', icon: '📢' },
-  { id: 'gate-pass', label: 'Leave & Gate Pass', labelHi: 'अवकाश', icon: '🚪' },
+  { id: 'gate-pass', label: 'Hostel, Leave & Gate Pass', labelHi: 'छात्रावास व अवकाश', icon: '🚪' },
+  { id: 'timetable', label: 'Timetable', labelHi: 'समय-सारणी', icon: '🗓' },
+  { id: 'transport', label: 'Bus', labelHi: 'बस', icon: '🚌' },
   { id: 'messaging', label: 'Message Teacher', labelHi: 'अध्यापक से संपर्क', icon: '💬' },
   { id: 'verification', label: 'Verification (DigiLocker)', labelHi: 'सत्यापन (डिजीलॉकर)', icon: '🔐' },
 ];
@@ -86,12 +90,13 @@ function ParentAIWidget({ lang, onClose }: { lang: 'hi' | 'en'; onClose: () => v
           <div className="flex gap-1.5 mb-2 flex-wrap">
             {chips.map(c => <button key={c} onClick={() => send(c)} disabled={busy} className="px-2 py-1 rounded-full bg-white/5 border border-white/10 text-white/50 text-[11px] hover:bg-white/10 cursor-pointer disabled:opacity-40">{c}</button>)}
           </div>
+          {voice.error && <p className="text-[11px] text-red-300 mb-1.5">{voice.error}</p>}
           <div className="flex gap-2">
-            <input value={voice.listening ? voice.interim : input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()}
+            <input value={(voice.listening || voice.transcribing) ? voice.interim : input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()}
               placeholder={voice.listening ? t('Listening…', 'सुन रहे हैं…') : t('Ask about attendance, fee, results…', 'उपस्थिति, शुल्क, परिणाम…')}
               className="flex-1 px-3 py-2 bg-[#0D1B35] border border-white/10 rounded-lg text-white text-[13px] placeholder-white/30 outline-none focus:border-[#7C3AED]" />
             {voice.supported && (
-              <button onClick={() => (voice.listening ? voice.stop() : voice.start())} aria-label="Speak" className={`w-9 h-9 rounded-lg flex items-center justify-center cursor-pointer ${voice.listening ? 'bg-red-500 animate-pulse' : 'bg-white/10'}`}>
+              <button onClick={() => (voice.listening ? voice.stop() : voice.start())} disabled={voice.transcribing} aria-label="Speak" className={`w-9 h-9 rounded-lg flex items-center justify-center cursor-pointer ${voice.listening ? 'bg-red-500 animate-pulse' : 'bg-white/10'}`}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10a7 7 0 0 0 14 0M12 17v5" /></svg>
               </button>
             )}
@@ -191,6 +196,8 @@ export default function ParentPortal({ onNavigate }: Props) {
         {module === 'results' && <ParentResults lang={lang} />}
         {module === 'announcements' && <ParentAnnouncements lang={lang} />}
         {module === 'gate-pass' && <ParentGatePass lang={lang} />}
+        {module === 'transport' && <ParentTransport lang={lang} />}
+        {module === 'timetable' && <ParentTimetable lang={lang} />}
         {module === 'messaging' && <ParentMessaging lang={lang} />}
         {module === 'verification' && <ParentVerification lang={lang} />}
       </div>

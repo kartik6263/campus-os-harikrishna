@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { prisma } from '../../db.js';
 import { ApiError, asyncHandler, validate } from '../../lib/http.js';
 import { resolveFacultyId } from '../../auth/middleware.js';
-import { ATTENDANCE_THRESHOLD, attendanceFor, isLocked, istToday, overallAttendance, ownedAssignment, PRESENT_STATUSES } from './shared.js';
+import { attendanceFor, isLocked, istToday, overallAttendance, ownedAssignment } from './shared.js';
+import { attendedStatuses, currentPolicy } from '../attendance/policy.js';
 
 /**
  * One subject on a lecturer's load, opened up: its timetable, the registers
@@ -30,7 +31,7 @@ subjectRouter.get(
     const [slots, enrolments, sessions, sheet, materials, pendingDisputes] = await Promise.all([
       prisma.timetableSlot.findMany({ where: { subjectId, facultyId, term: assignment.term } }),
       prisma.enrolment.findMany({
-        where: { subjectId, term: assignment.term },
+        where: { subjectId, term: assignment.term, student: { status: 'ACTIVE' } },
         include: {
           student: {
             select: {
@@ -70,7 +71,7 @@ subjectRouter.get(
     const recentIds = sessions.filter((s) => s.markedAt).slice(0, 5).map((s) => s.id);
     const recentPresent = recentIds.length
       ? await prisma.attendanceRecord.findMany({
-          where: { sessionId: { in: recentIds }, studentId: { in: studentIds }, status: { in: [...PRESENT_STATUSES] } },
+          where: { sessionId: { in: recentIds }, studentId: { in: studentIds }, status: { in: attendedStatuses(currentPolicy()) } },
           select: { studentId: true },
         })
       : [];
@@ -122,7 +123,7 @@ subjectRouter.get(
       room: assignment.room,
       kind: assignment.kind,
       term: assignment.term,
-      threshold: ATTENDANCE_THRESHOLD,
+      threshold: currentPolicy().threshold,
       schedule: slots
         .sort((a, b) => DAY_ORDER.indexOf(a.day) - DAY_ORDER.indexOf(b.day) || a.startTime.localeCompare(b.startTime))
         .map((s) => ({ slotId: s.id, day: s.day, time: `${s.startTime}–${s.endTime}`, room: s.room, cancelled: s.cancelled })),
@@ -141,7 +142,7 @@ subjectRouter.get(
         averageAttendance: withAttendance.length
           ? Number((withAttendance.reduce((a, s) => a + s.attendance.percent, 0) / withAttendance.length).toFixed(1))
           : null,
-        belowThreshold: withAttendance.filter((s) => s.attendance.percent < ATTENDANCE_THRESHOLD).length,
+        belowThreshold: withAttendance.filter((s) => s.attendance.percent < currentPolicy().threshold).length,
         averageMarks: scoredStudents.length && maxTotal
           ? Number(((scoredStudents.reduce((a, s) => a + (s.marksTotal ?? 0), 0) / scoredStudents.length / maxTotal) * 100).toFixed(1))
           : null,
@@ -219,7 +220,7 @@ subjectRouter.get(
         present: mine?.present ?? 0,
         held: mine?.total ?? 0,
         percent: mine?.percent ?? 0,
-        threshold: ATTENDANCE_THRESHOLD,
+        threshold: currentPolicy().threshold,
         classes: sessions.map((x) => ({
           sessionId: x.id,
           date: x.date,
@@ -274,7 +275,7 @@ subjectRouter.get(
         select: { id: true, date: true, startTime: true, markedAt: true },
       }),
       prisma.enrolment.findMany({
-        where: { subjectId: assignment.subjectId, term: assignment.term },
+        where: { subjectId: assignment.subjectId, term: assignment.term, student: { status: 'ACTIVE' } },
         include: { student: { select: { id: true, rollNo: true, name: true } } },
         orderBy: { student: { rollNo: 'asc' } },
       }),

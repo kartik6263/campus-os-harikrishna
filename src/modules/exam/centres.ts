@@ -133,7 +133,7 @@ centresRouter.post(
     if (!centre) throw ApiError.notFound(`No centre with code ${centreCode}`);
 
     const cleared = await prisma.examForm.findMany({
-      where: { eligibility: 'CLEARED', ...(semester ? { semester } : {}) },
+      where: { eligibility: 'CLEARED', student: { status: 'ACTIVE' }, ...(semester ? { semester } : {}) },
       select: { studentId: true, semester: true },
       orderBy: { student: { rollNo: 'asc' } },
     });

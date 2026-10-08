@@ -4,6 +4,7 @@ import type { Module } from '../StudentPortal';
 import { EmptyState, InlineAlert, Spinner } from '../../components/ui';
 import { api, ApiError } from '../../lib/api';
 import { openMaterial } from '../../lib/records';
+import StudyPlanCard from '../../components/StudyPlanCard';
 
 interface Props { onNavigate: (m: Module) => void }
 
@@ -35,6 +36,7 @@ export default function Syllabus(_props: Props) {
         <h1 className="text-[18px] font-bold text-[#16264A]">Syllabus & Study Material</h1>
         <p className="text-[13px] text-[#5A6577] mt-0.5">Shared by your teachers, unit by unit</p>
       </div>
+      <div className="px-4 pt-3"><StudyPlanCard theme="light" /></div>
       <div className="bg-white border-b border-[#D3D8E0] flex overflow-x-auto px-4 py-2 gap-2">
         {subjects.map(s => (
           <button key={s.code} onClick={() => setCode(s.code)} className={`shrink-0 px-3 py-1.5 rounded-[4px] text-[12px] font-medium font-mono cursor-pointer ${current.code === s.code ? 'bg-[#16264A] text-white' : 'bg-[#EDEFF3] text-[#5A6577] hover:bg-[#D3D8E0]'}`}>

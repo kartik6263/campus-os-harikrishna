@@ -9,18 +9,32 @@ import FeeCollection from './office/FeeCollection';
 import CertificateQueue from './office/CertificateQueue';
 import ExamScrutiny from './office/ExamScrutiny';
 import VerificationRegister from './office/VerificationRegister';
+import StudentLifecycle from './shared/StudentLifecycle';
+import DigitalCertificates from './shared/DigitalCertificates';
+import HostelManagement from './acadops/campus/HostelManagement';
+import TransportManagement from './acadops/campus/TransportManagement';
+import AttendanceAdmin from './shared/AttendanceAdmin';
+import TimetableManagement from './shared/TimetableManagement';
+import FeeDesk from './shared/FeeDesk';
 import { inst, instPlace } from '../lib/institution';
 
 interface Props {
   onNavigate: (s: Screen) => void;
 }
 
-type Module = 'admission' | 'fee' | 'certificate' | 'exam' | 'verification';
+type Module = 'admission' | 'lifecycle' | 'fee' | 'accounts' | 'certificate' | 'digital' | 'hostel' | 'transport' | 'attendance' | 'timetable' | 'exam' | 'verification';
 
 const MODULE_LABELS: Record<Module, string> = {
   admission: 'Admission Entry',
+  lifecycle: 'Student Lifecycle & No-Dues',
   fee: 'Fee Collection',
+  accounts: 'Fee Accounts',
   certificate: 'Certificate Queue',
+  digital: 'Digital Certificates',
+  hostel: 'Hostel',
+  transport: 'Transport',
+  attendance: 'Attendance',
+  timetable: 'Timetable',
   exam: 'Exam Scrutiny',
   verification: 'Identity Verification',
 };
@@ -97,8 +111,15 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { id: 'admission', label: 'Admission Entry', icon: IconUsers },
+  { id: 'lifecycle', label: 'Lifecycle & No-Dues', icon: IconClipboard },
   { id: 'fee', label: 'Fee Collection', icon: IconCash },
+  { id: 'accounts', label: 'Fee Accounts', icon: IconCash },
   { id: 'certificate', label: 'Certificate Queue', icon: IconFile },
+  { id: 'digital', label: 'Digital Certificates', icon: IconShield },
+  { id: 'hostel', label: 'Hostel', icon: IconUsers },
+  { id: 'transport', label: 'Transport', icon: IconClipboard },
+  { id: 'attendance', label: 'Attendance', icon: IconShield },
+  { id: 'timetable', label: 'Timetable', icon: IconClipboard },
   { id: 'exam', label: 'Exam Scrutiny', icon: IconClipboard },
   { id: 'verification', label: 'Identity Verification', icon: IconShield },
 ];
@@ -187,8 +208,15 @@ export default function CollegeOffice({ onNavigate }: Props) {
         <main className="flex-1 overflow-y-auto">
           {module === 'admission' && <AdmissionEntry {...moduleProps} />}
           {module === 'fee' && <FeeCollection {...moduleProps} />}
+          {module === 'accounts' && <FeeDesk />}
           {module === 'certificate' && <CertificateQueue {...moduleProps} />}
+          {module === 'digital' && <DigitalCertificates />}
+          {module === 'hostel' && <HostelManagement />}
+          {module === 'transport' && <TransportManagement />}
+          {module === 'attendance' && <AttendanceAdmin />}
+          {module === 'timetable' && <TimetableManagement />}
           {module === 'exam' && <ExamScrutiny {...moduleProps} />}
+          {module === 'lifecycle' && <StudentLifecycle />}
           {module === 'verification' && <VerificationRegister />}
         </main>
       </div>

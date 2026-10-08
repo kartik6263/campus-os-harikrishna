@@ -103,6 +103,8 @@ export interface ApiCertificate {
   issuedBy: string | null;
   issuedAt: string | null;
   rejectReason: string | null;
+  /** The signed certificate, once the request is ready. */
+  certificate: { id: string; serialNo: string; status: string; verifyUrl: string } | null;
 }
 
 export interface ApiExamForm {
@@ -467,6 +469,8 @@ export interface LegacyCertItem {
   daysLeft: number | null;
   overdue: boolean;
   requestId: string;
+  rejectReason: string | null;
+  certificate: ApiCertificate['certificate'];
 }
 
 /** `CERT_QUEUE` as the certificate screen expects it. */
@@ -492,6 +496,8 @@ export function useCertificateQueue() {
         notes: c.notes ?? undefined,
         daysLeft: c.daysLeft,
         overdue: c.overdue,
+        rejectReason: c.rejectReason,
+        certificate: c.certificate,
       })),
     [q.data],
   );

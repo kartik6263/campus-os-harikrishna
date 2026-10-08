@@ -10,10 +10,14 @@ import ApprovalInbox from './principal/ApprovalInbox';
 import WorkloadAllocation from './principal/WorkloadAllocation';
 import AffiliationCompliance from './principal/AffiliationCompliance';
 import SubjectAllocation from './shared/SubjectAllocation';
+import DigitalCertificates from './shared/DigitalCertificates';
+import AttendanceAdmin from './shared/AttendanceAdmin';
+import TimetableManagement from './shared/TimetableManagement';
+import FeeDesk from './shared/FeeDesk';
 
 interface Props { onNavigate: (s: Screen) => void }
 
-type Module = 'inbox' | 'dashboard' | 'allocation' | 'workload' | 'affiliation';
+type Module = 'inbox' | 'dashboard' | 'allocation' | 'workload' | 'affiliation' | 'certificates' | 'attendance' | 'timetable' | 'fees';
 
 
 
@@ -31,6 +35,10 @@ export default function PrincipalPortal({ onNavigate }: Props) {
     { id: 'allocation', label: 'Subject Allocation' },
     { id: 'workload', label: 'Faculty Workload' },
     { id: 'affiliation', label: 'Affiliation Compliance' },
+    { id: 'certificates', label: 'Digital Certificates' },
+    { id: 'attendance', label: 'Attendance' },
+    { id: 'timetable', label: 'Timetable' },
+    { id: 'fees', label: 'Fee Accounts' },
   ];
 
   return (
@@ -124,6 +132,10 @@ export default function PrincipalPortal({ onNavigate }: Props) {
           {module === 'dashboard' && <CollegeDashboard onNavigate={onNavigate} onModule={(m) => setModule(m as Module)} />}
           {module === 'allocation' && <SubjectAllocation />}
           {module === 'workload' && <WorkloadAllocation onNavigate={onNavigate} onModule={(m) => setModule(m as Module)} />}
+          {module === 'certificates' && <DigitalCertificates />}
+          {module === 'attendance' && <AttendanceAdmin />}
+          {module === 'timetable' && <TimetableManagement />}
+          {module === 'fees' && <FeeDesk />}
           {module === 'affiliation' && <AffiliationCompliance onNavigate={onNavigate} onModule={(m) => setModule(m as Module)} />}
         </main>
       </div>

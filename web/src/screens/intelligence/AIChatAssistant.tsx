@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ToastContainer } from '../../components/ui';
 import Markdown from '../../components/Markdown';
-import { LOOKUP_LABELS, speak, stopSpeaking, useAssistant, useAssistantStatus, useSpeechInput } from '../../lib/assistant';
+import { LOOKUP_LABELS, MODE_LABEL, speak, stopSpeaking, useAssistant, useAssistantStatus, useSpeechInput } from '../../lib/assistant';
 import { downloadPdf } from '../../lib/export';
 
 type Lang = 'en' | 'hi';
@@ -61,9 +61,9 @@ export default function AIChatAssistant() {
         <span className="text-blue-300">🔒 Answers come only from records your role may see, and every question is written to the audit log.</span>
         <span className="ml-auto flex items-center gap-2">
           {mode && (
-            <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${mode === 'claude' ? 'bg-purple-600/40 text-purple-100' : 'bg-white/10 text-white/70'}`}
-              title={mode === 'claude' ? `Claude (${status.data?.model}) chooses the lookups and writes the answer` : 'Built-in reports — add an Anthropic API key on the server to enable Claude'}>
-              {mode === 'claude' ? '✦ Claude' : 'Built-in reports'}
+            <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${mode !== 'builtin' ? 'bg-purple-600/40 text-purple-100' : 'bg-white/10 text-white/70'}`}
+              title={mode !== 'builtin' ? `${mode === 'gemini' ? 'Google Gemini' : 'Claude'} (${status.data?.model}) chooses the lookups and writes the answer` : 'Built-in reports — add a Gemini API key on the server to enable the AI model'}>
+              {MODE_LABEL[mode]}
             </span>
           )}
           <button onClick={() => setReadAloud(r => !r)} className={`px-2 py-0.5 rounded text-[11px] cursor-pointer ${readAloud ? 'bg-[#E0952A] text-white' : 'bg-white/10 text-white/70 hover:text-white'}`}>
@@ -97,6 +97,7 @@ export default function AIChatAssistant() {
             <div key={i} className={`flex ${t.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[88%] rounded-2xl px-4 py-3 text-[14px] ${t.role === 'user' ? 'bg-[#E0952A] text-white rounded-br-sm' : t.error ? 'bg-[#A8242C]/30 border border-[#A8242C]/50 rounded-bl-sm' : 'bg-white/5 border border-white/10 rounded-bl-sm'}`}>
                 {t.role === 'user' ? t.content : <Markdown text={t.content} dark />}
+                {t.role === 'assistant' && t.notice && <p className="mt-2 text-[11px] text-amber-200/80">{t.notice}</p>}
                 {t.role === 'assistant' && !t.error && (
                   <div className="flex flex-wrap items-center gap-1.5 mt-2 pt-2 border-t border-white/10 text-[11px] text-white/50">
                     {(t.lookups ?? []).map(l => <span key={l} className="bg-white/10 rounded px-1.5 py-0.5">{LOOKUP_LABELS[l] ?? l}</span>)}
@@ -122,8 +123,16 @@ export default function AIChatAssistant() {
 
       <div className="border-t border-white/10 bg-[#0A1428] px-4 py-3 shrink-0">
         <div className="max-w-3xl mx-auto">
-          {(voice.listening || voice.error) && (
-            <p className={`text-[12px] mb-2 ${voice.error ? 'text-red-300' : 'text-purple-200'}`}>{voice.error ?? `Listening… ${voice.interim}`}</p>
+          {(voice.listening || voice.transcribing || voice.error) && (
+            <p className={`text-[12px] mb-2 ${voice.error ? 'text-red-300' : 'text-purple-200'}`}>{voice.error ?? (voice.engine === 'gemini' ? voice.interim : `Listening… ${voice.interim}`)}</p>
+          )}
+          {voice.canChoose && (
+            <div className="flex items-center gap-2 mb-2 text-[11px] text-white/50">
+              <span>Voice input:</span>
+              {(['browser', 'gemini'] as const).map(e => (
+                <button key={e} onClick={() => voice.setEngine(e)} className={`px-2 py-0.5 rounded cursor-pointer ${voice.engine === e ? 'bg-white/15 text-white' : 'hover:text-white'}`}>{e === 'browser' ? 'Browser (live words)' : '✦ Gemini (better Hindi)'}</button>
+              ))}
+            </div>
           )}
           <div className="flex items-center gap-2">
             <div className="flex rounded-lg overflow-hidden border border-white/15 shrink-0">
@@ -132,7 +141,7 @@ export default function AIChatAssistant() {
               ))}
             </div>
             <input
-              value={voice.listening ? voice.interim : input}
+              value={voice.listening && voice.engine === 'browser' ? voice.interim : input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') void send(); }}
               placeholder={lang === 'hi' ? 'अपना प्रश्न लिखें…' : 'Ask a question…'}
@@ -141,8 +150,8 @@ export default function AIChatAssistant() {
             />
             <button
               onClick={() => (voice.listening ? voice.stop() : voice.start())}
-              disabled={busy || !voice.supported}
-              title={voice.supported ? (voice.listening ? 'Stop listening' : 'Speak your question') : 'Speech input needs Chrome or Edge'}
+              disabled={busy || voice.transcribing || !voice.supported}
+              title={voice.supported ? (voice.listening ? 'Stop listening' : 'Speak your question') : 'Voice input needs Chrome or Edge, or a Gemini key on the server'}
               className={`w-10 h-10 rounded-lg flex items-center justify-center cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${voice.listening ? 'bg-red-500 animate-pulse' : 'bg-white/10 hover:bg-white/20'}`}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10a7 7 0 0 0 14 0M12 17v5" /></svg>

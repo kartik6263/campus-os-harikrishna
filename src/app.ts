@@ -33,8 +33,18 @@ import { verifyRouter } from './modules/verify.js';
 import { vendorRouter } from './modules/vendor.js';
 import { verificationRouter } from './modules/verification.js';
 import { allocationRouter } from './modules/allocation.js';
+import { lifecycleRouter } from './modules/lifecycle.js';
+import { aiRouter } from './modules/intelligence/ai.js';
+import { certificatesRouter as digitalCertificatesRouter } from './modules/certificates/index.js';
+import { hostelRouter } from './modules/hostel/index.js';
+import { transportRouter } from './modules/transport/index.js';
+import { attendanceAdminRouter } from './modules/attendance/admin.js';
+import { attendanceSelfRouter } from './modules/attendance/student.js';
+import { timetableRouter } from './modules/timetable/index.js';
+import { feeAdminRouter } from './modules/finance/admin.js';
 import { poolRouter, tenantScope } from './tenancy.js';
 import { metricsMiddleware } from './lib/metrics.js';
+import { primePolicy } from './modules/attendance/policy.js';
 
 export function createApp() {
   const app = express();
@@ -50,7 +60,9 @@ export function createApp() {
     limit: '1mb',
     verify: (req, _res, buf) => { (req as express.Request & { rawBody?: Buffer }).rawBody = buf; },
   });
-  app.use((req, res, next) => (req.path.startsWith('/api/files') ? next() : json(req, res, next)));
+  // A voice question arrives as base64 audio, larger than any form.
+  const voiceJson = express.json({ limit: '2mb' });
+  app.use((req, res, next) => (req.path.startsWith('/api/files') ? next() : req.path === '/api/assistant/transcribe' ? voiceJson(req, res, next) : json(req, res, next)));
   app.use(cookieParser());
   app.use(metricsMiddleware);
 
@@ -81,6 +93,8 @@ export function createApp() {
   // here, and every other request runs inside its institute's schema.
   app.use('/internal/pool', poolRouter);
   app.use(tenantScope);
+  // Attendance rules are read synchronously by many routes; load them once per request.
+  app.use(primePolicy);
 
   app.use('/api/auth', authRouter);
   app.use('/api/institution', institutionRouter);
@@ -88,7 +102,11 @@ export function createApp() {
   app.use('/api/payments', paymentsWebhookRouter);
   app.use('/api/student/fees', feesRouter);
   app.use('/api/student', studentRouter);
+  app.use('/api/attendance', attendanceSelfRouter);
   app.use('/api/attendance', attendanceRouter);
+  app.use('/api/attendance-admin', attendanceAdminRouter);
+  app.use('/api/timetable', timetableRouter);
+  app.use('/api/fee-admin', feeAdminRouter);
   app.use('/api/announcements', announcementsRouter);
   app.use('/api/faculty', facultyRouter);
   app.use('/api/office', officeRouter);
@@ -108,6 +126,11 @@ export function createApp() {
   app.use('/api/vendor', vendorRouter);
   app.use('/api/verification', verificationRouter);
   app.use('/api/allocation', allocationRouter);
+  app.use('/api/lifecycle', lifecycleRouter);
+  app.use('/api/ai', aiRouter);
+  app.use('/api/certificates', digitalCertificatesRouter);
+  app.use('/api/hostel', hostelRouter);
+  app.use('/api/transport', transportRouter);
   // The students' own halves of the office and examination counters.
   app.use('/api/student/certificates', studentCertificatesRouter);
   app.use('/api/student/revaluations', requireAuth, studentRevaluationRouter);

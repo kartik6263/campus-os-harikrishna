@@ -21,7 +21,7 @@ export default function VoiceAssistant() {
   const voice = useSpeechInput(lang, text => { setHeard(text); setStage('review'); });
 
   useEffect(() => { if (voice.listening) setStage('listening'); }, [voice.listening]);
-  useEffect(() => { if (!voice.listening && stage === 'listening' && !heard) setStage('idle'); }, [voice.listening, stage, heard]);
+  useEffect(() => { if (!voice.listening && !voice.transcribing && stage === 'listening' && !heard) setStage('idle'); }, [voice.listening, voice.transcribing, stage, heard]);
   useEffect(() => () => stopSpeaking(), []);
 
   async function submit(text: string) {
@@ -52,7 +52,7 @@ export default function VoiceAssistant() {
 
       {!voice.supported && (
         <div className="bg-orange-900/60 border-b border-orange-700 px-4 py-2.5 text-[13px] text-orange-200 shrink-0">
-          {t('This browser has no speech recognition — open the campus app in Chrome or Edge, or type below.', 'इस ब्राउज़र में आवाज़ पहचान नहीं है — Chrome या Edge में खोलें, या नीचे लिखें।')}
+          {t('Voice input is not available here — open the campus app in Chrome or Edge (or ask the IT cell to add a Gemini key), or type below.', 'यहाँ आवाज़ इनपुट उपलब्ध नहीं है — Chrome या Edge में खोलें, या नीचे लिखें।')}
         </div>
       )}
 
@@ -66,14 +66,22 @@ export default function VoiceAssistant() {
           <div className="flex flex-col items-center gap-5">
             <button
               onClick={() => (voice.listening ? voice.stop() : voice.start())}
-              disabled={!voice.supported}
+              disabled={!voice.supported || voice.transcribing}
               className={`w-28 h-28 rounded-full flex items-center justify-center shadow-lg transition-all cursor-pointer active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${voice.listening ? 'bg-red-500 shadow-red-900/50 animate-pulse' : 'bg-gradient-to-br from-[#7C3AED] to-[#4C1D95] shadow-purple-900/50 hover:from-[#8B5CF6]'}`}
               aria-label={voice.listening ? 'Stop listening' : 'Start speaking'}
             >
               <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8"><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10a7 7 0 0 0 14 0M12 17v5" /></svg>
             </button>
-            <p className="text-[16px] font-medium">{voice.listening ? t('Listening… tap to stop', 'सुन रहा हूँ… रोकने के लिए टैप करें') : t('Tap and ask your question', 'टैप करें और अपना प्रश्न पूछें')}</p>
-            {voice.listening && <p className="text-[15px] text-purple-200 min-h-6 max-w-lg text-center">{voice.interim}</p>}
+            <p className="text-[16px] font-medium">{voice.transcribing ? t('Writing down what you said…', 'आपकी बात लिख रहा हूँ…') : voice.listening ? t('Listening… tap to stop', 'सुन रहा हूँ… रोकने के लिए टैप करें') : t('Tap and ask your question', 'टैप करें और अपना प्रश्न पूछें')}</p>
+            {voice.listening && voice.engine === 'browser' && <p className="text-[15px] text-purple-200 min-h-6 max-w-lg text-center">{voice.interim}</p>}
+            {voice.canChoose && !voice.listening && !voice.transcribing && (
+              <div className="flex rounded-full overflow-hidden border border-white/15 text-[12px]">
+                {(['browser', 'gemini'] as const).map(e => (
+                  <button key={e} onClick={() => voice.setEngine(e)} className={`px-3 py-1.5 cursor-pointer ${voice.engine === e ? 'bg-white/15 text-white' : 'text-white/50 hover:text-white'}`}>{e === 'browser' ? t('Browser', 'ब्राउज़र') : '✦ Gemini'}</button>
+                ))}
+              </div>
+            )}
+            {voice.engine === 'gemini' && !voice.listening && !voice.transcribing && <p className="text-[11px] text-white/40 max-w-sm text-center">{t('Your clip is transcribed by Google Gemini and not stored.', 'आपकी रिकॉर्डिंग Google Gemini से लिखी जाती है और सहेजी नहीं जाती।')}</p>}
             {voice.error && <p className="text-[13px] text-red-300 max-w-md text-center">{voice.error}</p>}
             <p className="text-[12px] text-white/40 max-w-sm text-center">{t('Try: "How many students owe fees?" or "Which college has the lowest attendance?"', 'उदाहरण: "कितने छात्रों की फीस बकाया है?" या "किस कॉलेज की उपस्थिति सबसे कम है?"')}</p>
           </div>

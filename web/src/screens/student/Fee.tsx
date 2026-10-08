@@ -4,6 +4,7 @@ import { ApiError } from '../../lib/api';
 import { downloadPdf } from '../../lib/export';
 import { inst } from '../../lib/institution';
 import { useFees, usePayFeeItem, usePayInstalment, useProfile, type Fees } from '../../lib/queries';
+import { statementPdf, useMyStatement } from '../../lib/feeadmin';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 interface Props { onNavigate: (m: any) => void }
@@ -31,6 +32,7 @@ export default function Fee({ onNavigate }: Props) {
   const payInst = usePayInstalment();
   const payItem = usePayFeeItem();
   const [paying, setPaying] = useState<Paying | null>(null);
+  const statement = useMyStatement();
 
   if (isLoading) return <div className="flex justify-center py-16"><Spinner size={22} /></div>;
   if (error || !f) return <div className="p-4"><InlineAlert type="error">{error instanceof ApiError ? error.message : 'Could not load your fee account.'}</InlineAlert></div>;
@@ -52,7 +54,10 @@ export default function Fee({ onNavigate }: Props) {
 
   const receipt = (p: Fees['payments'][number]) => downloadPdf({
     title: 'Fee Receipt', subtitle: inst().name, reference: p.receipt ?? p.txnId, fileName: `receipt-${(p.receipt ?? p.txnId).replace(/\//g, '-')}`,
-    sections: [{ fields: [['Student', s?.name], ['Enrolment number', s?.enrolmentNo], ['Programme', s ? `${s.programme.name}, semester ${s.semester}` : ''], ['Towards', p.head], ['Amount', inr(p.amount)], ['Mode', p.mode], ['Transaction', p.txnId], ['Date', new Date(p.date).toLocaleString('en-IN')], ['Status', p.status === 'SUCCESS' ? 'Received' : p.status === 'PENDING' ? 'Awaiting clearance' : 'Failed']] }],
+    sections: [
+      { fields: [['Student', s?.name], ['Enrolment number', s?.enrolmentNo], ['Programme', s ? `${s.programme.name}, semester ${s.semester}` : ''], ['Towards', p.head], ['Amount', inr(Math.abs(p.amount))], ['Mode', p.mode], ['Transaction', p.txnId], ['Date', new Date(p.date).toLocaleString('en-IN')], ['Status', p.status === 'SUCCESS' ? (p.kind === 'CONCESSION' ? 'Concession credited' : p.kind === 'REFUND' ? 'Refunded to you' : 'Received') : p.status === 'PENDING' ? 'Awaiting clearance' : p.status === 'CANCELLED' ? `Cancelled — ${p.cancelReason ?? ''}` : 'Failed']] },
+      ...(p.appliedTo?.length ? [{ heading: 'Applied to', table: { head: ['Fee head', 'Amount'], body: p.appliedTo.map((a) => [a.head, inr(a.amount)]) } }] : []),
+    ],
     qr: `${p.receipt ?? p.txnId}|${s?.enrolmentNo ?? ''}|${p.amount}`, signatory: 'Accounts Officer',
   });
 
@@ -64,7 +69,10 @@ export default function Fee({ onNavigate }: Props) {
       <div className="bg-[#16264A] text-white px-4 py-5">
         <p className="text-[12px] text-white/60">Outstanding</p>
         <p className={`text-[34px] font-bold leading-tight ${f.summary.due > 0 ? 'text-[#FCA5A5]' : 'text-[#6EE7B7]'}`}>{inr(f.summary.due)}</p>
-        <p className="text-[12px] text-white/60">{inr(f.summary.paid)} paid of {inr(f.summary.total)} charged</p>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-[12px] text-white/60">{inr(f.summary.paid)} paid of {inr(f.summary.total)} charged</p>
+          <button disabled={!statement.data} onClick={() => statement.data && statementPdf(statement.data)} className="text-[12px] border border-white/30 rounded-[4px] px-3 py-1.5 hover:bg-white/10 cursor-pointer disabled:opacity-50">Statement PDF</button>
+        </div>
       </div>
       <div className="bg-white border-b border-[#D3D8E0] flex overflow-x-auto">
         {TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ minHeight: 44 }} className={`px-4 py-3 text-[13px] font-medium whitespace-nowrap cursor-pointer ${tab === t ? 'text-[#E0952A] border-b-2 border-[#E0952A] -mb-px' : 'text-[#5A6577] hover:text-[#16264A]'}`}>{t}</button>)}
@@ -104,6 +112,22 @@ export default function Fee({ onNavigate }: Props) {
               </div>
             ))}
           </div>
+          {(f.concessions ?? []).length > 0 && (
+            <>
+              <SectionHeader label="Concessions" />
+              <div className="bg-white border-b border-[#D3D8E0]">
+                {f.concessions!.map(c => <div key={c.id} className="px-4 py-2.5 border-b border-[#EDEFF3] last:border-0 text-[13px]"><div className="flex justify-between"><span className="text-[#16264A]">{c.head}</span><span className={c.status === 'APPROVED' ? 'text-[#0E7A5F]' : c.status === 'REJECTED' ? 'text-[#A8242C]' : 'text-[#8A6D1F]'}>−{inr(c.amount)} · {c.status === 'PENDING' ? 'under consideration' : c.status.toLowerCase()}</span></div>{c.note && <p className="text-[11px] text-[#5A6577]">{c.note}</p>}</div>)}
+              </div>
+            </>
+          )}
+          {(f.refunds ?? []).length > 0 && (
+            <>
+              <SectionHeader label="Refunds" />
+              <div className="bg-white border-b border-[#D3D8E0]">
+                {f.refunds!.map(r => <div key={r.id} className="px-4 py-2.5 border-b border-[#EDEFF3] last:border-0 text-[13px]"><div className="flex justify-between"><span className="text-[#16264A]">{r.head} <span className="font-mono text-[11px] text-[#5A6577]">{r.no}</span></span><span className={r.status === 'PAID' ? 'text-[#0E7A5F]' : r.status === 'REJECTED' ? 'text-[#A8242C]' : 'text-[#8A6D1F]'}>{inr(r.amount)} · {r.status === 'PAID' ? `paid ${day(r.paidAt)} (${r.payoutMode} ${r.payoutRef})` : r.status === 'REQUESTED' ? 'awaiting approval' : r.status.toLowerCase()}</span></div>{r.note && <p className="text-[11px] text-[#5A6577]">{r.note}</p>}</div>)}
+              </div>
+            </>
+          )}
           {f.scholarships.length > 0 && (
             <>
               <SectionHeader label="Scholarships adjusted" right={<button onClick={() => onNavigate('scholarship')} className="text-[12px] text-[#E0952A] cursor-pointer">Scholarships →</button>} />
@@ -125,7 +149,7 @@ export default function Fee({ onNavigate }: Props) {
                     <p className="text-[14px] text-[#16264A] font-medium">{p.head} · <span className={p.amount < 0 ? 'text-[#0E7A5F]' : ''}>{inr(p.amount)}</span></p>
                     <p className="text-[11px] text-[#5A6577]">{day(p.date)} · {p.mode} · <span className="font-mono">{p.receipt ?? p.txnId}</span></p>
                   </div>
-                  {p.status === 'SUCCESS' ? <button onClick={() => void receipt(p)} className="text-[12px] font-semibold text-[#E0952A] cursor-pointer shrink-0">Receipt ↓</button>
+                  {p.status === 'SUCCESS' || p.status === 'CANCELLED' ? <button onClick={() => void receipt(p)} className="text-[12px] font-semibold text-[#E0952A] cursor-pointer shrink-0">{p.status === 'CANCELLED' ? 'Cancelled ↓' : 'Receipt ↓'}</button>
                     : <span className={`text-[11px] font-semibold shrink-0 ${p.status === 'PENDING' ? 'text-[#8A6D1F]' : 'text-[#A8242C]'}`}>{p.status === 'PENDING' ? 'Awaiting clearance' : 'Failed'}</span>}
                 </div>
               ))}

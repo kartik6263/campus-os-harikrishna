@@ -28,6 +28,24 @@ const schema = z.object({
   /** Claude, for the campus assistant. Unset: the assistant answers from its built-in reports only. */
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_MODEL: z.string().default('claude-opus-5-5'),
+  /**
+   * Google Gemini (aistudio.google.com/apikey), for the assistant, voice
+   * transcription, counselling briefs, performance coaching and study plans.
+   * Unset: every AI feature answers from its built-in rules instead.
+   */
+  GEMINI_API_KEY: z.string().optional(),
+  /**
+   * The Ed25519 private key (PKCS#8 PEM, or that PEM base64-encoded) that
+   * signs digital certificates. Unset: a key is made on first use and kept in
+   * the institute's database; set it to hold the key outside the database.
+   */
+  CERT_SIGNING_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().default('gemini-3.8-flash'),
+  /** Defaults to GEMINI_MODEL; any Gemini model that understands audio. */
+  GEMINI_TRANSCRIBE_MODEL: z.string().optional(),
+  GEMINI_BASE_URL: z.string().url().default('https://generativelanguage.googleapis.com/v1beta'),
+  /** Which model answers the assistant when both keys are set. auto: Gemini first, then Claude. */
+  AI_PROVIDER: z.enum(['auto', 'gemini', 'claude', 'builtin']).default('auto'),
 
   /** Razorpay. Unset: fees are settled by the simulated path (demo only). */
   RAZORPAY_KEY_ID: z.string().optional(),

@@ -52,13 +52,19 @@ export interface AttendanceSubject {
   present: number;
   percent: number;
   meetsThreshold: boolean;
+  /** At or above the bar but under the institution's warning line. */
+  warning?: boolean;
+  late?: number;
+  excused?: number;
   classesNeeded: number;
+  canMiss?: number;
   /** Classes not marked present, newest first: what a dispute can be raised against. */
   missed?: Array<{ sessionId: string; date: string; time: string }>;
 }
 
 export interface Attendance {
   threshold: number;
+  policy?: { threshold: number; condonationFloor: number; warnBelow: number; lateCountsAsPresent: boolean };
   overall: { present: number; total: number; percent: number };
   subjects: AttendanceSubject[];
 }
@@ -107,8 +113,14 @@ export interface Fees {
     mode: string;
     txnId: string;
     receipt: string | null;
-    status: 'PENDING' | 'SUCCESS' | 'FAILED';
+    status: 'PENDING' | 'SUCCESS' | 'FAILED' | 'CANCELLED';
+    kind?: 'RECEIPT' | 'CONCESSION' | 'REFUND';
+    cancelReason?: string | null;
+    /** The fee heads this payment settled. */
+    appliedTo?: Array<{ head: string; amount: number }>;
   }>;
+  concessions?: Array<{ id: string; no: string; head: string; kind: string; amount: number; status: 'PENDING' | 'APPROVED' | 'REJECTED'; note: string | null; at: string }>;
+  refunds?: Array<{ id: string; no: string; head: string; amount: number; status: 'REQUESTED' | 'APPROVED' | 'PAID' | 'REJECTED'; note: string | null; paidAt: string | null; payoutMode: string | null; payoutRef: string | null; at: string }>;
   scholarships: Array<{
     id: string;
     name: string;
@@ -204,8 +216,6 @@ export const useFees = () =>
 export const useResults = () =>
   useQuery({ queryKey: keys.results, queryFn: () => api<SemResult[]>('/api/student/results') });
 
-export const useTransport = () =>
-  useQuery({ queryKey: keys.transport, queryFn: () => api<Transport | null>('/api/student/transport') });
 
 export const useNotifications = () =>
   useQuery({
@@ -485,31 +495,6 @@ export function useResultsRecord() {
         status: s.passed ? ('pass' as const) : ('fail' as const),
       })),
     })),
-    isPending: q.isPending,
-    error: q.error,
-  };
-}
-
-/** `TRANSPORT` as the transport screen expects it, with dates pre-formatted. */
-export function useTransportRecord() {
-  const q = useTransport();
-  const t = q.data;
-
-  return {
-    data: t
-      ? {
-          routeNo: t.routeNo,
-          name: t.name,
-          busNo: t.busNo,
-          driver: t.driver,
-          driverPhone: t.driverPhone,
-          currentStop: t.currentStop,
-          passValid: t.passValid,
-          passDue: formatDate(t.passDue),
-          lastUpdated: new Date(t.lastUpdated).toLocaleString(),
-          stops: t.stops,
-        }
-      : null,
     isPending: q.isPending,
     error: q.error,
   };

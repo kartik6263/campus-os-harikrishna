@@ -1,464 +1,297 @@
 import { useState } from 'react';
-import { Button, Input, Modal, toast } from '../../components/ui';
+import { Button, EmptyState, InlineAlert, Input, Modal, Select, Spinner, Tabs, toast } from '../../components/ui';
+import { ApiError } from '../../lib/api';
+import { useAuth } from '../../lib/auth';
+import { downloadCSV } from '../../lib/export';
 import {
-  MODE_TO_API,
-  receiptToLegacy,
-  useCounterLookup,
-  useCounterTransactions,
-  useTakePayment,
-  type LegacyCounterTransaction as CounterTransaction,
-} from '../../lib/officequeries';
-import { inst, instPlace } from '../../lib/institution';
+  COUNTER_MODES, MODE_LABEL, inr, receiptPdf,
+  useCancelReceipt, useCloseDay, useCounterDay, useDayBook, useLookupStudent, useSettleCheque, useTake,
+  type CounterMode, type CounterReceiptRow, type CounterStudent, type TakenPayment,
+} from '../../lib/feeadmin';
 
-interface Props {
-  onModule: (m: string) => void;
-}
+interface Props { onModule: (m: string) => void }
 
-const FEE_HEADS = [
-  'Semester Fee', 'Examination Fee', 'Hostel Fee',
-  'Library Fine', 'Miscellaneous', 'Late Fee Penalty',
-];
+/**
+ * The college fee counter: look a student up, take money against a chosen
+ * head or their oldest dues, hand over a PDF receipt; clear or bounce
+ * cheques and drafts; cancel a receipt taken in error; and close the day's
+ * cash book.
+ */
 
+const errText = (e: unknown) => (e instanceof ApiError ? e.message : 'Could not reach the server.');
+const istToday = () => new Date(Date.now() + 5.5 * 3_600_000).toISOString().slice(0, 10);
+const time = (iso: string) => new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+const STATUS: Record<CounterReceiptRow['status'], { label: string; cls: string }> = {
+  COMPLETE: { label: 'Received', cls: 'bg-[#D1FAE5] text-[#0E7A5F]' },
+  PENDING_CLEARANCE: { label: 'Awaiting clearance', cls: 'bg-[#FEF9EC] text-[#8A6D1F]' },
+  BOUNCED: { label: 'Bounced', cls: 'bg-[#FEE2E2] text-[#A8242C]' },
+  CANCELLED: { label: 'Cancelled', cls: 'bg-[#EDEFF3] text-[#5A6577] line-through' },
+};
+const NEEDS_REF: Partial<Record<CounterMode, string>> = { CHEQUE: 'Cheque number', DD: 'Demand draft number', UPI: 'UPI reference', CARD: 'Card approval code', NEFT: 'UTR number' };
 
-function genReceiptNo() {
-  return `CNT/RDU/2024/${String(Math.floor(Math.random() * 900000) + 100000)}`;
-}
-
-function nowStr() {
-  const d = new Date();
-  const date = `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`;
-  const h = d.getHours();
-  const ampm = h >= 12 ? 'PM' : 'AM';
-  const hh = String(h % 12 || 12).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const time = `${hh}:${mm} ${ampm}`;
-  return { date, time };
-}
-
-type Mode = 'Cash' | 'Cheque' | 'UPI' | 'DD';
-
-function SectionLabel({ label, right }: { label: string; right?: React.ReactNode }) {
+export default function FeeCollection(_props: Props) {
+  const [tab, setTab] = useState('receipts');
   return (
-    <div className="bg-[#EDEFF3] px-4 py-2 flex items-center justify-between">
-      <span className="text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">{label}</span>
-      {right}
+    <div className="flex flex-col lg:flex-row h-full min-h-0 overflow-hidden">
+      <CollectPanel />
+      <div className="flex-1 flex flex-col bg-[#EDEFF3] min-h-0">
+        <div className="bg-white px-4"><Tabs tabs={[{ id: 'receipts', label: 'Receipts' }, { id: 'daybook', label: 'Day book' }]} activeId={tab} onChange={setTab} /></div>
+        <div className="flex-1 overflow-y-auto">{tab === 'receipts' ? <Receipts /> : <DayBookTab />}</div>
+      </div>
     </div>
   );
 }
 
-function ModeTab({ mode, active, onClick }: { mode: Mode; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`px-4 py-2 text-[13px] font-medium border-b-2 transition-colors cursor-pointer ${active ? 'text-[#E0952A] border-[#E0952A]' : 'text-[#5A6577] border-transparent hover:text-[#16264A]'}`}
-    >
-      {mode}
-    </button>
-  );
-}
+// ─── Taking money ─────────────────────────────────────────────────────────────
 
-// ─── Receipt Modal ─────────────────────────────────────────────────────────────
-function ReceiptModal({
-  receipt,
-  onPrint,
-  onNew,
-}: {
-  receipt: CounterTransaction;
-  onPrint: () => void;
-  onNew: () => void;
-}) {
-  return (
-    <Modal open title="Payment Receipt" onClose={onNew} width="520px"
-      footer={
-        <div className="flex gap-3 justify-end">
-          <Button variant="secondary" size="sm" onClick={onNew}>New Collection</Button>
-          <Button size="sm" onClick={onPrint}>Print Receipt</Button>
-        </div>
-      }
-    >
-      <div className="space-y-4">
-        {/* Letterhead */}
-        <div className="text-center border-b border-[#D3D8E0] pb-4">
-          <div className="w-10 h-10 bg-[#16264A] rounded-[2px] flex items-center justify-center mx-auto mb-2">
-            <span className="text-white font-bold text-[14px]">{inst().shortCode}</span>
-          </div>
-          <p className="text-[13px] font-semibold text-[#16264A]">{instPlace()}</p>
-          <p className="text-[11px] text-[#5A6577]">Fee Collection Counter</p>
-          <p className="text-[22px] font-bold text-[#16264A] mt-2 tracking-widest">RECEIPT</p>
-        </div>
-
-        {/* Receipt details */}
-        <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-[13px]">
-          <div>
-            <span className="text-[#5A6577]">Receipt No.</span>
-            <p className="font-mono font-semibold text-[#16264A] text-[12px]">{receipt.receiptNo}</p>
-          </div>
-          <div>
-            <span className="text-[#5A6577]">Date & Time</span>
-            <p className="font-medium text-[#16264A]">{receipt.date} · {receipt.time}</p>
-          </div>
-          <div>
-            <span className="text-[#5A6577]">Student Name</span>
-            <p className="font-semibold text-[#16264A]">{receipt.studentName}</p>
-          </div>
-          <div>
-            <span className="text-[#5A6577]">Student ID</span>
-            <p className="font-mono text-[12px] text-[#16264A]">{receipt.studentId}</p>
-          </div>
-          <div>
-            <span className="text-[#5A6577]">Programme</span>
-            <p className="font-medium text-[#16264A]">{receipt.programme}</p>
-          </div>
-          <div>
-            <span className="text-[#5A6577]">Mode of Payment</span>
-            <p className="font-medium text-[#16264A]">
-              {receipt.mode}
-              {receipt.chequeNo && ` · Cheque #${receipt.chequeNo}`}
-              {receipt.upiRef && ` · ${receipt.upiRef.slice(0, 14)}…`}
-              {receipt.ddNo && ` · DD #${receipt.ddNo}`}
-            </p>
-          </div>
-        </div>
-
-        <div className="border border-[#D3D8E0] rounded-[4px] p-4 text-center">
-          <p className="text-[12px] text-[#5A6577] uppercase tracking-wide mb-1">{receipt.head}</p>
-          <p className="text-[32px] font-bold text-[#16264A]">₹{receipt.amount.toLocaleString('en-IN')}</p>
-        </div>
-
-        <p className="text-[12px] text-[#5A6577] text-center">Received by: {receipt.receivedBy}</p>
-        <p className="text-[11px] text-[#5A6577] text-center italic">This is a computer-generated receipt and does not require a signature.</p>
-      </div>
-    </Modal>
-  );
-}
-
-// ─── Main Component ────────────────────────────────────────────────────────────
-export default function FeeCollection({ onModule }: Props) {
-  const { data: transactions, totals } = useCounterTransactions();
-  const lookup = useCounterLookup();
-  const takePayment = useTakePayment();
-
-  const [studentId, setStudentId] = useState('');
-  const [studentInfo, setStudentInfo] = useState<
-    { id: string; name: string; programme: string; dues: number } | null
-  >(null);
-  const [head, setHead] = useState(FEE_HEADS[0]);
+function CollectPanel() {
+  const lookup = useLookupStudent();
+  const take = useTake();
+  const [q, setQ] = useState('');
+  const [student, setStudent] = useState<CounterStudent | null>(null);
+  const [feeItemId, setFeeItemId] = useState('');
   const [amount, setAmount] = useState('');
-  const [mode, setMode] = useState<Mode>('Cash');
-  const [chequeNo, setChequeNo] = useState('');
-  const [bankName, setBankName] = useState('');
-  const [upiRef, setUpiRef] = useState('');
-  const [ddNo, setDdNo] = useState('');
-  const [ddBank, setDdBank] = useState('');
-  const [ddDate, setDdDate] = useState('');
-  const [processing, setProcessing] = useState(false);
-  const [receiptOpen, setReceiptOpen] = useState(false);
-  const [lastReceipt, setLastReceipt] = useState<CounterTransaction | null>(null);
+  const [mode, setMode] = useState<CounterMode>('CASH');
+  const [ref, setRef] = useState('');
+  const [bank, setBank] = useState('');
+  const [done, setDone] = useState<TakenPayment | null>(null);
 
-  async function lookupStudent() {
-    const q = studentId.trim();
-    if (q.length < 2) return;
+  async function find(query = q) {
+    if (query.trim().length < 2) return;
     try {
-      const s = await lookup.mutateAsync(q);
-      setStudentInfo({
-        id: s.id,
-        name: s.name,
-        programme: `${s.programme.shortName} ${s.semester}`,
-        dues: s.totals.due,
-      });
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Student not found — check the ID and try again');
-      setStudentInfo(null);
-    }
+      const s = await lookup.mutateAsync(query.trim());
+      setStudent(s); setFeeItemId(''); setAmount(s.totals.due > 0 ? String(s.totals.due) : '');
+    } catch (e) { setStudent(null); toast.error(errText(e)); }
   }
+  const chosen = student?.heads.find((h) => h.id === feeItemId);
+  const owing = student?.heads.filter((h) => h.due > 0) ?? [];
+  const n = Number(amount);
+  const needsRef = NEEDS_REF[mode];
+  const ok = !!student && Number.isInteger(n) && n > 0 && (!needsRef || ref.trim().length >= 3);
 
-  function resetForm() {
-    setStudentId('');
-    setStudentInfo(null);
-    setHead(FEE_HEADS[0]);
-    setAmount('');
-    setMode('Cash');
-    setChequeNo('');
-    setBankName('');
-    setUpiRef('');
-    setDdNo('');
-    setDdBank('');
-    setDdDate('');
-    setReceiptOpen(false);
-  }
-
-  async function handleCollect(e: React.FormEvent) {
+  async function collect(e: React.FormEvent) {
     e.preventDefault();
-    if (!studentInfo) return;
-    setProcessing(true);
+    if (!student || !ok) return;
     try {
-      const instrument =
-        mode === 'Cheque' ? chequeNo : mode === 'DD' ? ddNo : mode === 'UPI' ? upiRef : undefined;
-
-      const created = await takePayment.mutateAsync({
-        studentId: studentInfo.id,
-        head,
-        amount: Number(amount),
-        mode: MODE_TO_API[mode] ?? 'CASH',
-        ...(instrument ? { instrument } : {}),
-        ...(bankName || ddBank ? { remarks: [bankName, ddBank, ddDate].filter(Boolean).join(' · ') } : {}),
+      const r = await take.mutateAsync({
+        studentId: student.id, amount: n, mode, head: chosen?.head ?? (owing.length === 1 ? owing[0]!.head : 'Fee payment'),
+        ...(feeItemId ? { feeItemId } : {}), ...(needsRef ? { instrument: ref.trim() } : {}), ...(bank.trim() ? { remarks: bank.trim() } : {}),
       });
-
-      setLastReceipt(
-        receiptToLegacy({
-          id: created.id,
-          receiptNo: created.receiptNo,
-          studentId: studentInfo.id,
-          enrolmentNo: created.enrolmentNo,
-          studentName: created.studentName,
-          programme: studentInfo.programme,
-          head: created.head,
-          amount: created.amount,
-          mode: created.mode,
-          instrument: created.instrument,
-          receivedBy: 'Counter',
-          receivedAt: created.receivedAt,
-          status: created.status,
-          remarks: null,
-        }),
-      );
-      setReceiptOpen(true);
-
-      // Read the balance back so the clerk sees what the student now owes.
-      const refreshed = await lookup.mutateAsync(studentInfo.id);
-      setStudentInfo(prev => (prev ? { ...prev, dues: refreshed.totals.due } : prev));
-
-      if (created.status === 'PENDING_CLEARANCE') {
-        toast.info('Recorded as pending clearance — the balance moves when it clears.');
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not record the payment.');
-    } finally {
-      setProcessing(false);
-    }
+      setDone(r);
+      setRef(''); setBank('');
+      await find(student.enrolmentNo);
+    } catch (err) { toast.error(errText(err)); }
   }
-
-  // Only settled money counts towards the day's takings.
-  const todayTotal = totals?.collected ?? 0;
 
   return (
-    <div className="flex h-full min-h-0 overflow-hidden">
-      {/* Left: Entry Form */}
-      <div className="w-[400px] flex-shrink-0 border-r border-[#D3D8E0] flex flex-col bg-white overflow-y-auto">
-        <div className="border-b border-[#D3D8E0] px-5 py-4">
-          <h2 className="text-[16px] font-semibold text-[#16264A]">Counter Payment Entry</h2>
-          <p className="text-[12px] text-[#5A6577]">Record cash, cheque, UPI, or DD payments</p>
-        </div>
-
-        <form onSubmit={handleCollect} className="flex-1 flex flex-col">
-          <div className="p-5 space-y-4">
-            {/* Student lookup */}
-            <SectionLabel label="Student Lookup" />
-            <div className="flex gap-2">
-              <input
-                value={studentId}
-                onChange={e => setStudentId(e.target.value)}
-                placeholder="RDU/20XX/PROG/XXXX"
-                className="flex-1 h-9 px-3 text-[13px] font-mono text-[#16264A] border border-[#D3D8E0] rounded-[4px] outline-none focus:border-[#E0952A] placeholder-[#5A6577]/60"
-              />
-              <Button type="button" variant="secondary" size="sm" onClick={lookupStudent}>Look Up</Button>
-            </div>
-
-            {studentInfo && (
-              <div className="bg-[#EDEFF3] border border-[#D3D8E0] rounded-[4px] p-3 text-[13px]">
-                <p className="font-semibold text-[#16264A]">{studentInfo.name}</p>
-                <p className="text-[#5A6577]">{studentInfo.programme}</p>
-                {studentInfo.dues > 0 && (
-                  <p className="text-[#A8242C] font-medium mt-1">Outstanding dues: ₹{studentInfo.dues.toLocaleString('en-IN')}</p>
-                )}
-                {studentInfo.dues === 0 && (
-                  <p className="text-[#0E7A5F] text-[12px] mt-1">No outstanding dues</p>
-                )}
-              </div>
-            )}
-
-            {/* Fee Head */}
-            <SectionLabel label="Payment Details" />
-            <div className="flex flex-col gap-1">
-              <label className="text-[13px] font-medium text-[#16264A]">Fee Head</label>
-              <select
-                value={head}
-                onChange={e => setHead(e.target.value)}
-                className="h-9 px-3 text-[14px] text-[#16264A] bg-white border border-[#D3D8E0] rounded-[4px] outline-none focus:border-[#E0952A]"
-              >
-                {FEE_HEADS.map(h => <option key={h}>{h}</option>)}
-              </select>
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <label className="text-[13px] font-medium text-[#16264A]">Amount (₹)</label>
-              <input
-                type="number"
-                value={amount}
-                onChange={e => setAmount(e.target.value)}
-                placeholder="0"
-                min={1}
-                required
-                className="h-9 px-3 text-[14px] text-[#16264A] border border-[#D3D8E0] rounded-[4px] outline-none focus:border-[#E0952A]"
-              />
-            </div>
-
-            {/* Mode */}
-            <SectionLabel label="Mode of Payment" />
-            <div className="flex border-b border-[#D3D8E0]">
-              {(['Cash', 'Cheque', 'UPI', 'DD'] as Mode[]).map(m => (
-                <ModeTab key={m} mode={m} active={mode === m} onClick={() => setMode(m)} />
-              ))}
-            </div>
-
-            {mode === 'Cheque' && (
-              <div className="space-y-3">
-                <div className="flex flex-col gap-1">
-                  <label className="text-[13px] font-medium text-[#16264A]">Cheque No.</label>
-                  <input
-                    value={chequeNo}
-                    onChange={e => setChequeNo(e.target.value)}
-                    placeholder="Cheque number"
-                    className="h-9 px-3 text-[13px] font-mono text-[#16264A] border border-[#D3D8E0] rounded-[4px] outline-none focus:border-[#E0952A]"
-                  />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className="text-[13px] font-medium text-[#16264A]">Bank Name</label>
-                  <input
-                    value={bankName}
-                    onChange={e => setBankName(e.target.value)}
-                    placeholder="Bank name"
-                    className="h-9 px-3 text-[13px] text-[#16264A] border border-[#D3D8E0] rounded-[4px] outline-none focus:border-[#E0952A]"
-                  />
-                </div>
-              </div>
-            )}
-
-            {mode === 'UPI' && (
-              <div className="flex flex-col gap-1">
-                <label className="text-[13px] font-medium text-[#16264A]">UPI Reference No.</label>
-                <input
-                  value={upiRef}
-                  onChange={e => setUpiRef(e.target.value)}
-                  placeholder="UPI transaction reference"
-                  className="h-9 px-3 text-[13px] font-mono text-[#16264A] border border-[#D3D8E0] rounded-[4px] outline-none focus:border-[#E0952A]"
-                />
-              </div>
-            )}
-
-            {mode === 'DD' && (
-              <div className="space-y-3">
-                <div className="flex flex-col gap-1">
-                  <label className="text-[13px] font-medium text-[#16264A]">DD No.</label>
-                  <input
-                    value={ddNo}
-                    onChange={e => setDdNo(e.target.value)}
-                    placeholder="DD number"
-                    className="h-9 px-3 text-[13px] font-mono text-[#16264A] border border-[#D3D8E0] rounded-[4px] outline-none focus:border-[#E0952A]"
-                  />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className="text-[13px] font-medium text-[#16264A]">Bank</label>
-                  <input
-                    value={ddBank}
-                    onChange={e => setDdBank(e.target.value)}
-                    placeholder="Issuing bank"
-                    className="h-9 px-3 text-[13px] text-[#16264A] border border-[#D3D8E0] rounded-[4px] outline-none focus:border-[#E0952A]"
-                  />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className="text-[13px] font-medium text-[#16264A]">DD Date</label>
-                  <input
-                    type="date"
-                    value={ddDate}
-                    onChange={e => setDdDate(e.target.value)}
-                    className="h-9 px-3 text-[13px] text-[#16264A] border border-[#D3D8E0] rounded-[4px] outline-none focus:border-[#E0952A]"
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="px-5 pb-5 mt-auto">
-            <Button
-              type="submit"
-              className="w-full"
-              loading={processing}
-              disabled={!studentInfo || !amount}
-            >
-              Collect Payment
-            </Button>
-          </div>
-        </form>
+    <div className="lg:w-[420px] flex-shrink-0 border-b lg:border-b-0 lg:border-r border-[#D3D8E0] bg-white overflow-y-auto">
+      <div className="border-b border-[#D3D8E0] px-5 py-4">
+        <h2 className="text-[16px] font-semibold text-[#16264A]">Fee counter</h2>
+        <p className="text-[12px] text-[#5A6577]">Cash, UPI, card, cheque, DD or bank transfer — a receipt for every rupee</p>
       </div>
-
-      {/* Right: Transaction History */}
-      <div className="flex-1 flex flex-col bg-[#EDEFF3] overflow-hidden">
-        <div className="bg-white border-b border-[#D3D8E0] px-5 py-3 flex items-center justify-between">
-          <div>
-            <p className="text-[13px] font-semibold text-[#16264A]">Transaction History</p>
-            <p className="text-[12px] text-[#5A6577]">
-              Today's collections: <span className="font-semibold text-[#0E7A5F]">₹{todayTotal.toLocaleString('en-IN')}</span> across {transactions.length} transactions
-            </p>
-          </div>
+      <form onSubmit={collect} className="p-5 flex flex-col gap-4">
+        <div className="flex gap-2 items-end">
+          <div className="flex-1"><Input label="Student" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Enrolment no., roll no. or name" onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void find(); } }} /></div>
+          <Button type="button" variant="secondary" loading={lookup.isPending} onClick={() => void find()}>Look up</Button>
         </div>
+        {student && (
+          <div className="border border-[#D3D8E0] rounded-[4px]">
+            <div className="px-3 py-2 bg-[#EDEFF3]">
+              <p className="text-[14px] font-semibold text-[#16264A]">{student.name}</p>
+              <p className="text-[12px] text-[#5A6577]">{student.enrolmentNo} · {student.programme.shortName} semester {student.semester}{student.mobile ? ` · ${student.mobile}` : ''}</p>
+              <p className={`text-[13px] font-semibold mt-1 ${student.totals.due ? 'text-[#A8242C]' : 'text-[#0E7A5F]'}`}>{student.totals.due ? `Outstanding ${inr(student.totals.due)}` : 'Nothing outstanding'}</p>
+            </div>
+            {owing.length > 0 && (
+              <div className="max-h-48 overflow-y-auto">
+                {owing.map((h) => (
+                  <label key={h.id} className={`flex items-center justify-between gap-2 px-3 py-1.5 text-[12px] border-t border-[#EDEFF3] cursor-pointer ${feeItemId === h.id ? 'bg-[#FEF9EC]' : ''}`}>
+                    <span className="flex items-center gap-2"><input type="radio" name="head" checked={feeItemId === h.id} onChange={() => { setFeeItemId(h.id); setAmount(String(h.due)); }} />{h.head} <span className="text-[#5A6577]">{h.term}</span></span>
+                    <span className="font-semibold text-[#16264A]">{inr(h.due)}</span>
+                  </label>
+                ))}
+                <label className={`flex items-center gap-2 px-3 py-1.5 text-[12px] border-t border-[#EDEFF3] cursor-pointer ${!feeItemId ? 'bg-[#FEF9EC]' : ''}`}>
+                  <input type="radio" name="head" checked={!feeItemId} onChange={() => { setFeeItemId(''); setAmount(String(student.totals.due)); }} />Oldest dues first (any amount)
+                </label>
+              </div>
+            )}
+          </div>
+        )}
+        <Input label="Amount (₹)" inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value.replace(/\D/g, ''))} hint={chosen && n > chosen.due ? `More than the ${inr(chosen.due)} owed on this head — the rest is held as an advance` : undefined} />
+        <Select label="Mode" value={mode} onChange={(e) => { setMode(e.target.value as CounterMode); setRef(''); }}>
+          {COUNTER_MODES.map((m) => <option key={m} value={m}>{MODE_LABEL[m]}</option>)}
+        </Select>
+        {needsRef && <Input label={needsRef} value={ref} maxLength={60} onChange={(e) => setRef(e.target.value)} />}
+        {(mode === 'CHEQUE' || mode === 'DD') && <Input label="Bank and branch" value={bank} maxLength={120} onChange={(e) => setBank(e.target.value)} hint="A cheque or DD reduces the dues only when it clears." />}
+        <Button type="submit" loading={take.isPending} disabled={!ok}>Collect {n > 0 ? inr(n) : ''}</Button>
+      </form>
 
-        <div className="flex-1 overflow-y-auto">
-          <table className="w-full text-[13px] bg-white">
-            <thead className="sticky top-0">
-              <tr className="bg-[#EDEFF3]">
-                <th className="text-left px-4 py-2 font-semibold text-[#5A6577] text-[11px] uppercase tracking-wide">Date / Time</th>
-                <th className="text-left px-4 py-2 font-semibold text-[#5A6577] text-[11px] uppercase tracking-wide">Student Name</th>
-                <th className="text-left px-4 py-2 font-semibold text-[#5A6577] text-[11px] uppercase tracking-wide">Head</th>
-                <th className="text-right px-4 py-2 font-semibold text-[#5A6577] text-[11px] uppercase tracking-wide">Amount</th>
-                <th className="text-left px-4 py-2 font-semibold text-[#5A6577] text-[11px] uppercase tracking-wide">Mode</th>
-                <th className="text-left px-4 py-2 font-semibold text-[#5A6577] text-[11px] uppercase tracking-wide">Receipt No.</th>
-                <th className="text-left px-4 py-2 font-semibold text-[#5A6577] text-[11px] uppercase tracking-wide">Status</th>
-              </tr>
-            </thead>
+      <Modal open={!!done} onClose={() => setDone(null)} title={done?.status === 'PENDING_CLEARANCE' ? 'Provisional receipt' : 'Payment received'} width="480px"
+        footer={<><Button variant="secondary" size="sm" onClick={() => setDone(null)}>Close</Button><Button size="sm" onClick={() => done && receiptPdf({ receiptNo: done.receiptNo, date: done.receivedAt, student: done.studentName, enrolmentNo: done.enrolmentNo, programme: student ? `${student.programme.shortName} ${student.semester}` : undefined, head: done.head, amount: done.amount, mode: done.mode, instrument: done.instrument, status: done.status, appliedTo: done.appliedTo })}>Download receipt (PDF)</Button></>}>
+        {done && (
+          <div className="flex flex-col gap-2 text-[13px]">
+            <p className="text-[24px] font-bold text-[#16264A]">{inr(done.amount)}</p>
+            <p><span className="text-[#5A6577]">Receipt</span> <span className="font-mono font-semibold">{done.receiptNo}</span></p>
+            <p className="text-[#5A6577]">{done.studentName} · {MODE_LABEL[done.mode] ?? done.mode}{done.instrument ? ` · ${done.instrument}` : ''}</p>
+            {done.status === 'PENDING_CLEARANCE'
+              ? <InlineAlert type="warning">Recorded pending clearance. Mark it cleared in Receipts when the bank confirms; only then do the dues come down.</InlineAlert>
+              : done.appliedTo.length > 0 && (
+                <div className="border border-[#EDEFF3] rounded-[4px]">
+                  {done.appliedTo.map((a) => <div key={a.head} className="flex justify-between px-3 py-1.5 border-b border-[#EDEFF3] last:border-0"><span>{a.head}</span><span className="font-semibold">{inr(a.amount)}</span></div>)}
+                </div>
+              )}
+            {done.unallocated > 0 && done.status !== 'PENDING_CLEARANCE' && <InlineAlert type="info">{inr(done.unallocated)} is more than was owed and stays on the account as an advance.</InlineAlert>}
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}
+
+// ─── Receipts ─────────────────────────────────────────────────────────────────
+
+function Receipts() {
+  const { user } = useAuth();
+  const [date, setDate] = useState(istToday());
+  const { data, isPending, error } = useCounterDay(date);
+  const settle = useSettleCheque();
+  const cancel = useCancelReceipt();
+  const [open, setOpen] = useState<CounterReceiptRow | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [reason, setReason] = useState('');
+  const senior = user?.role === 'REGISTRAR' || user?.role === 'ADMIN';
+  const rows = data?.receipts ?? [];
+
+  function pdf(r: CounterReceiptRow) {
+    receiptPdf({ receiptNo: r.receiptNo, date: r.receivedAt, student: r.studentName, enrolmentNo: r.enrolmentNo, programme: r.programme, head: r.head, amount: r.amount, mode: r.mode, instrument: r.instrument, status: r.status, receivedBy: r.receivedBy, cancelReason: r.status === 'CANCELLED' ? r.remarks : null });
+  }
+
+  return (
+    <div className="p-4 flex flex-col gap-3">
+      <div className="bg-white border border-[#D3D8E0] rounded-[4px] p-3 flex flex-wrap gap-3 items-end justify-between">
+        <div className="flex gap-3 items-end">
+          <Input label="Day" type="date" max={istToday()} value={date} onChange={(e) => setDate(e.target.value)} />
+          {data && <p className="text-[12px] text-[#5A6577] pb-2">Received {inr(data.totals.collected)} · {data.totals.count} receipts · {inr(data.totals.awaitingClearance)} awaiting clearance</p>}
+        </div>
+        <Button variant="secondary" size="sm" disabled={!rows.length} onClick={() => downloadCSV(`counter-receipts-${date}`, rows, [
+          { key: 'receiptNo', label: 'Receipt' }, { key: 'receivedAt', label: 'Time', value: (r: CounterReceiptRow) => time(r.receivedAt) }, { key: 'enrolmentNo', label: 'Enrolment' }, { key: 'studentName', label: 'Student' },
+          { key: 'head', label: 'Head' }, { key: 'amount', label: 'Amount' }, { key: 'mode', label: 'Mode' }, { key: 'instrument', label: 'Reference' }, { key: 'status', label: 'Status' }, { key: 'receivedBy', label: 'Clerk' },
+        ])}>Export CSV</Button>
+      </div>
+      {isPending && <div className="flex justify-center py-16"><Spinner /></div>}
+      {error && <InlineAlert type="error">{errText(error)}</InlineAlert>}
+      {data && rows.length === 0 && <div className="bg-white border border-[#D3D8E0] rounded-[4px]"><EmptyState title="No receipts" description="Nothing was received at the counter on this day." /></div>}
+      {rows.length > 0 && (
+        <div className="bg-white border border-[#D3D8E0] rounded-[4px] overflow-x-auto">
+          <table className="w-full text-[13px]">
+            <thead className="bg-[#F7F8FA]"><tr>{['Time', 'Receipt', 'Student', 'Head', 'Amount', 'Mode', 'Status'].map((h) => <th key={h} className={`px-3 py-2 text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider ${h === 'Amount' ? 'text-right' : 'text-left'}`}>{h}</th>)}</tr></thead>
             <tbody>
-              {transactions.map(t => (
-                <tr
-                  key={t.id}
-                  className="border-b border-[#D3D8E0] hover:bg-[#FAFAFA] cursor-pointer"
-                  onClick={() => toast.info(`Printing receipt ${t.receiptNo}…`)}
-                >
-                  <td className="px-4 py-3 text-[#5A6577] text-[12px]">
-                    <div>{t.date}</div>
-                    <div className="text-[11px]">{t.time}</div>
-                  </td>
-                  <td className="px-4 py-3 text-[#16264A] font-medium">{t.studentName}</td>
-                  <td className="px-4 py-3 text-[#5A6577]">{t.head}</td>
-                  <td className="px-4 py-3 text-right font-semibold text-[#16264A]">₹{t.amount.toLocaleString('en-IN')}</td>
-                  <td className="px-4 py-3 text-[#5A6577]">{t.mode}</td>
-                  <td className="px-4 py-3 font-mono text-[11px] text-[#16264A]">{t.receiptNo}</td>
-                  <td className="px-4 py-3">
-                    {t.status === 'complete' ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-[3px] bg-[#D1FAE5] text-[#0E7A5F]">
-                        Cleared
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-[3px] bg-[#FEF9EC] text-[#8A6D1F]">
-                        Awaiting clearance
-                      </span>
-                    )}
-                  </td>
+              {rows.map((r) => (
+                <tr key={r.id} className="border-t border-[#EDEFF3] hover:bg-[#FAFBFC] cursor-pointer" onClick={() => { setOpen(r); setCancelling(false); setReason(''); settle.reset(); cancel.reset(); }}>
+                  <td className="px-3 py-2 text-[#5A6577]">{time(r.receivedAt)}</td>
+                  <td className="px-3 py-2 font-mono text-[11px]">{r.receiptNo}</td>
+                  <td className="px-3 py-2"><p className="font-medium text-[#16264A]">{r.studentName}</p><p className="text-[11px] text-[#5A6577]">{r.enrolmentNo}</p></td>
+                  <td className="px-3 py-2 text-[#5A6577]">{r.head}</td>
+                  <td className="px-3 py-2 text-right font-semibold">{inr(r.amount)}</td>
+                  <td className="px-3 py-2 text-[#5A6577]">{MODE_LABEL[r.mode] ?? r.mode}{r.instrument ? <span className="block text-[11px] font-mono">{r.instrument}</span> : null}</td>
+                  <td className="px-3 py-2"><span className={`text-[11px] font-semibold px-2 py-0.5 rounded-[2px] ${STATUS[r.status].cls}`}>{STATUS[r.status].label}</span></td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      </div>
-
-      {/* Receipt Modal */}
-      {receiptOpen && lastReceipt && (
-        <ReceiptModal
-          receipt={lastReceipt}
-          onPrint={() => toast.success('Printing…')}
-          onNew={resetForm}
-        />
       )}
+
+      <Modal open={!!open} onClose={() => setOpen(null)} title={open ? `Receipt ${open.receiptNo}` : ''} width="500px"
+        footer={<><Button variant="secondary" size="sm" onClick={() => setOpen(null)}>Close</Button>{open && <Button size="sm" onClick={() => pdf(open)}>Download PDF</Button>}</>}>
+        {open && (
+          <div className="flex flex-col gap-3 text-[13px]">
+            {(settle.isError || cancel.isError) && <InlineAlert type="error">{errText(settle.error ?? cancel.error)}</InlineAlert>}
+            <div className="grid grid-cols-2 gap-2">
+              <p><span className="text-[#5A6577] block text-[11px]">Student</span>{open.studentName} · {open.enrolmentNo}</p>
+              <p><span className="text-[#5A6577] block text-[11px]">Amount</span><span className="font-semibold">{inr(open.amount)}</span></p>
+              <p><span className="text-[#5A6577] block text-[11px]">Mode</span>{MODE_LABEL[open.mode] ?? open.mode}{open.instrument ? ` · ${open.instrument}` : ''}</p>
+              <p><span className="text-[#5A6577] block text-[11px]">Received by</span>{open.receivedBy} at {time(open.receivedAt)}</p>
+            </div>
+            <span className={`self-start text-[11px] font-semibold px-2 py-0.5 rounded-[2px] ${STATUS[open.status].cls}`}>{STATUS[open.status].label}</span>
+            {open.remarks && <p className="text-[12px] text-[#5A6577]">{open.remarks}</p>}
+            {open.status === 'PENDING_CLEARANCE' && (
+              <div className="flex gap-2">
+                <Button size="sm" loading={settle.isPending} onClick={() => settle.mutate({ id: open.id, outcome: 'CLEARED' }, { onSuccess: () => { toast.success('Cleared — the dues have come down'); setOpen(null); } })}>Mark cleared</Button>
+                <Button size="sm" variant="destructive" loading={settle.isPending} onClick={() => settle.mutate({ id: open.id, outcome: 'BOUNCED', remarks: 'Returned unpaid by the bank' }, { onSuccess: () => { toast.success('Marked bounced — the student is told'); setOpen(null); } })}>Bounced</Button>
+              </div>
+            )}
+            {(open.status === 'COMPLETE' || open.status === 'PENDING_CLEARANCE') && (
+              !cancelling
+                ? <button className="self-start text-[12px] text-[#A8242C] cursor-pointer" onClick={() => setCancelling(true)}>Cancel this receipt…</button>
+                : (
+                  <div className="flex flex-col gap-2 border-t border-[#EDEFF3] pt-3">
+                    <p className="text-[12px] text-[#5A6577]">{senior ? 'Cancelling reverses what it paid; the student owes it again.' : 'You can cancel only today’s receipts, before the day book is closed.'}</p>
+                    <Input label="Reason" value={reason} maxLength={300} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Entered against the wrong student" />
+                    <Button size="sm" variant="destructive" disabled={reason.trim().length < 10} loading={cancel.isPending}
+                      onClick={() => cancel.mutate({ paymentId: open.paymentId, reason: reason.trim() }, { onSuccess: (r) => { toast.success(`Receipt cancelled — ${inr(r.reversed)} owed again`); setOpen(null); } })}>Cancel receipt</Button>
+                  </div>
+                )
+            )}
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}
+
+// ─── Day book ─────────────────────────────────────────────────────────────────
+
+function DayBookTab() {
+  const [date, setDate] = useState(istToday());
+  const { data, isPending, error } = useDayBook(date);
+  const close = useCloseDay();
+  const [counted, setCounted] = useState('');
+  const [remarks, setRemarks] = useState('');
+  if (isPending) return <div className="flex justify-center py-16"><Spinner /></div>;
+  if (error || !data) return <div className="p-4"><InlineAlert type="error">{errText(error)}</InlineAlert></div>;
+  const diff = counted ? Number(counted) - data.cash : 0;
+  const Group = ({ title, rows }: { title: string; rows: Array<{ key: string; amount: number }> }) => (
+    <div className="bg-white border border-[#D3D8E0] rounded-[4px]">
+      <p className="px-3 py-2 text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider border-b border-[#EDEFF3]">{title}</p>
+      {rows.length === 0 && <p className="px-3 py-3 text-[12px] text-[#5A6577]">Nothing</p>}
+      {rows.map((r) => <div key={r.key} className="flex justify-between px-3 py-1.5 text-[13px] border-b border-[#EDEFF3] last:border-0"><span>{MODE_LABEL[r.key] ?? r.key}</span><span className="font-semibold">{inr(r.amount)}</span></div>)}
+    </div>
+  );
+  return (
+    <div className="p-4 flex flex-col gap-3">
+      <div className="bg-white border border-[#D3D8E0] rounded-[4px] p-3 flex flex-wrap gap-4 items-end">
+        <Input label="Day" type="date" max={istToday()} value={date} onChange={(e) => { setDate(e.target.value); setCounted(''); setRemarks(''); }} />
+        <p className="text-[13px] pb-2"><span className="text-[#5A6577]">Collected</span> <span className="font-bold">{inr(data.collected)}</span> · <span className="text-[#5A6577]">cash in hand</span> <span className="font-bold">{inr(data.cash)}</span> · {data.count} receipts{data.pendingClearance ? ` · ${inr(data.pendingClearance)} awaiting clearance` : ''}</p>
+        <div className="flex-1" />
+        <Button variant="secondary" size="sm" disabled={!data.entries.length} onClick={() => downloadCSV(`day-book-${date}`, data.entries, [
+          { key: 'time', label: 'Time', value: (r) => time(r.time) }, { key: 'receiptNo', label: 'Receipt' }, { key: 'enrolmentNo', label: 'Enrolment' }, { key: 'student', label: 'Student' }, { key: 'head', label: 'Head' },
+          { key: 'amount', label: 'Amount' }, { key: 'mode', label: 'Mode' }, { key: 'channel', label: 'Channel' }, { key: 'clerk', label: 'Clerk' }, { key: 'status', label: 'Status' },
+        ])}>Export CSV</Button>
+      </div>
+      <div className="grid md:grid-cols-3 gap-3">
+        <Group title="By mode" rows={data.byMode} /><Group title="By clerk / channel" rows={data.byClerk} /><Group title="By head" rows={data.byHead} />
+      </div>
+      {data.cancelled.length > 0 && (
+        <div className="bg-white border border-[#D3D8E0] rounded-[4px]">
+          <p className="px-3 py-2 text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider border-b border-[#EDEFF3]">Cancelled receipts</p>
+          {data.cancelled.map((c, i) => <p key={i} className="px-3 py-1.5 text-[12px] border-b border-[#EDEFF3] last:border-0"><span className="font-mono">{c.receiptNo}</span> · {inr(c.amount)} · {c.reason} · {c.by}</p>)}
+        </div>
+      )}
+      <div className="bg-white border border-[#D3D8E0] rounded-[4px] p-4 flex flex-col gap-3 max-w-[560px]">
+        <p className="text-[15px] font-semibold text-[#16264A]">Close the cash book</p>
+        {data.closed ? (
+          <InlineAlert type="success">Closed by {data.closed.closedBy} on {new Date(data.closed.closedAt).toLocaleString('en-IN')}: book {inr(data.closed.expectedCash)}, counted {inr(data.closed.countedCash)}{data.closed.difference ? ` (difference ${inr(data.closed.difference)} — ${data.closed.remarks})` : ''}. Receipts of this day can no longer be cancelled.</InlineAlert>
+        ) : (
+          <>
+            {close.isError && <InlineAlert type="error">{errText(close.error)}</InlineAlert>}
+            <p className="text-[12px] text-[#5A6577]">Count the cash in the drawer. Once closed, the day’s receipts are final.</p>
+            <Input label="Cash counted (₹)" inputMode="numeric" value={counted} onChange={(e) => setCounted(e.target.value.replace(/\D/g, ''))} hint={counted ? (diff === 0 ? 'Matches the book' : `${diff > 0 ? 'Excess' : 'Short'} by ${inr(Math.abs(diff))}`) : `The book says ${inr(data.cash)}`} />
+            {diff !== 0 && <Input label="Explain the difference" value={remarks} maxLength={300} onChange={(e) => setRemarks(e.target.value)} />}
+            <Button disabled={!counted || (diff !== 0 && remarks.trim().length < 5)} loading={close.isPending}
+              onClick={() => close.mutate({ date, countedCash: Number(counted), ...(remarks.trim() ? { remarks: remarks.trim() } : {}) }, { onSuccess: () => toast.success(`Day book for ${date} closed`) })}>Close day</Button>
+          </>
+        )}
+      </div>
     </div>
   );
 }

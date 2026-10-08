@@ -2,9 +2,8 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, EmptyState, InlineAlert, Modal, Spinner, toast } from '../../components/ui';
 import { api, ApiError } from '../../lib/api';
-import { copyText, downloadPdf } from '../../lib/export';
-import { inst } from '../../lib/institution';
-import { useProfile } from '../../lib/queries';
+import { copyText } from '../../lib/export';
+import { downloadCertificate, standing, useMyCertificates, type DigitalCertificate } from '../../lib/certificates';
 
 interface Props { onNavigate: (m: any) => void }
 
@@ -13,42 +12,35 @@ interface CertRequest {
   id: string; requestNo: string; type: string; purpose: string; priority: 'NORMAL' | 'URGENT';
   stage: 'REQUESTED' | 'COLLEGE_OFFICE' | 'READY' | 'DISPATCHED' | 'REJECTED';
   fee: number; feePaid: boolean; requestedOn: string; slaDeadline: string; daysLeft: number | null; overdue: boolean;
-  notes: string | null; issuedBy: string | null; issuedAt: string | null; rejectReason: string | null; signature: string | null;
+  notes: string | null; issuedBy: string | null; issuedAt: string | null; rejectReason: string | null;
+  certificate: { id: string; serialNo: string; status: string; verifyUrl: string } | null;
 }
 
 const STAGES: Array<[CertRequest['stage'], string]> = [['REQUESTED', 'Requested'], ['COLLEGE_OFFICE', 'Being prepared'], ['READY', 'Ready'], ['DISPATCHED', 'Collected / dispatched']];
 const errText = (e: unknown) => (e instanceof ApiError ? e.message : 'Could not reach the server.');
 const day = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
-const verifyLink = (c: CertRequest) => `${window.location.origin}/?verify=${encodeURIComponent(c.requestNo)}${c.signature ? `&sig=${encodeURIComponent(c.signature)}` : ''}`;
 
 /**
  * The student's certificates: request one from the college office, follow
- * it through to collection, and — once issued — download a copy carrying a
- * QR code anyone can scan to confirm it is genuine.
+ * it through to collection, and — once issued — download the official,
+ * digitally signed PDF, which anyone can verify by its QR code or by
+ * uploading it to the public verifier.
  */
 export default function Certificates(_props: Props) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['student', 'certificates'], queryFn: () => api<{ types: CertType[]; requests: CertRequest[] }>('/api/student/certificates') });
-  const profile = useProfile();
+  const mine = useMyCertificates();
   const [asking, setAsking] = useState<CertType | null>(null);
   const [purpose, setPurpose] = useState('');
   const [urgent, setUrgent] = useState(false);
 
   const request = useMutation({
     mutationFn: () => api<CertRequest>('/api/student/certificates', { method: 'POST', body: { type: asking!.type, purpose: purpose.trim(), priority: urgent ? 'URGENT' : 'NORMAL' } }),
-    onSuccess: r => { toast.success(`Request ${r.requestNo} sent to the college office`); setAsking(null); setPurpose(''); setUrgent(false); void qc.invalidateQueries({ queryKey: ['student', 'certificates'] }); },
+    onSuccess: r => { toast.success(`Request ${r.requestNo} sent to the college office`); setAsking(null); setPurpose(''); setUrgent(false); void qc.invalidateQueries({ queryKey: ['student', 'certificates'] }); void qc.invalidateQueries({ queryKey: ['certificates', 'mine'] }); },
   });
 
-  async function download(c: CertRequest) {
-    const p = profile.data;
-    await downloadPdf({
-      title: c.type, subtitle: inst().name, reference: c.requestNo, fileName: `${c.type.replace(/\s+/g, '-').toLowerCase()}-${c.requestNo.replace(/\//g, '-')}`,
-      sections: [
-        { fields: [['Name', p?.name ?? ''], ['Enrolment number', p?.enrolmentNo ?? ''], ['Programme', p?.programme.name ?? ''], ['College', p?.college.name ?? ''], ['Purpose', c.purpose], ['Issued on', day(c.issuedAt)], ['Issued by', c.issuedBy ?? '']] },
-        { text: ['This is a copy of the certificate on record. Scan the QR code, or open the link printed with it, to confirm with the institution that it is genuine and unaltered.'] },
-      ],
-      qr: verifyLink(c), signatory: 'Principal / Registrar',
-    });
+  async function download(c: Pick<DigitalCertificate, 'id' | 'serialNo'>) {
+    try { await downloadCertificate(c); } catch (e) { toast.error(errText(e)); }
   }
 
   if (q.isLoading) return <div className="flex justify-center py-16"><Spinner size={22} /></div>;
@@ -62,6 +54,36 @@ export default function Certificates(_props: Props) {
         <h1 className="text-[18px] font-bold text-[#16264A]">Certificates</h1>
         <p className="text-[13px] text-[#5A6577] mt-0.5">Request, track and verify your certificates</p>
       </div>
+
+      <div className="bg-[#EDEFF3] px-4 py-2 mt-3 flex justify-between"><span className="text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">My digital certificates</span><span className="text-[12px] text-[#5A6577]">{mine.data?.length ?? 0}</span></div>
+      {mine.isLoading ? <div className="flex justify-center py-6"><Spinner /></div> : mine.isError ? <div className="px-4"><InlineAlert type="error">{errText(mine.error)}</InlineAlert></div> : (mine.data ?? []).length === 0 ? (
+        <div className="px-4"><EmptyState title="No certificates issued yet" description="Certificates the college issues to you — on request or directly — appear here, signed and ready to download." /></div>
+      ) : (
+        <div className="bg-white border-t border-b border-[#D3D8E0]">
+          {mine.data!.map((c, i) => {
+            const st = standing(c);
+            return (
+              <div key={c.id} className={`px-4 py-4 ${i < mine.data!.length - 1 ? 'border-b border-[#D3D8E0]' : ''}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="text-[14px] font-bold text-[#16264A]">{c.title}</p>
+                    <p className="font-mono text-[11px] text-[#5A6577]">{c.serialNo} · issued {day(c.issuedAt)}{c.validUntil ? ` · valid until ${day(c.validUntil)}` : ''}</p>
+                    <p className="text-[11px] text-[#5A6577]">Signed by {c.issuer.name}, {c.issuer.title} · checked {c.verifications} time{c.verifications === 1 ? '' : 's'}</p>
+                  </div>
+                  <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-[3px] shrink-0 ${st === 'Valid' ? 'bg-[#D1FAE5] text-[#0E7A5F]' : 'bg-[#FEE2E2] text-[#A8242C]'}`}>{st === 'Valid' ? '✓ Digitally signed' : st}</span>
+                </div>
+                {c.status === 'REVOKED' && <p className="text-[12px] text-[#A8242C] mt-2">Revoked {day(c.revokedAt)}: {c.revokedReason}</p>}
+                {c.status !== 'REVOKED' && (
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    {c.hasPdf && <Button size="sm" onClick={() => void download(c)}>Download signed PDF</Button>}
+                    <Button size="sm" variant="secondary" onClick={() => void copyText(c.verifyUrl, 'Verification link')}>Copy verification link</Button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <div className="bg-[#EDEFF3] px-4 py-2 mt-3 flex justify-between"><span className="text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">My requests</span><span className="text-[12px] text-[#5A6577]">{requests.length}</span></div>
       {requests.length === 0 ? <div className="px-4"><EmptyState title="No requests yet" description="Choose a certificate below to request it." /></div> : (
@@ -90,12 +112,13 @@ export default function Certificates(_props: Props) {
                 {c.stage === 'REJECTED' && c.rejectReason && <p className="text-[12px] text-[#A8242C] mt-2">{c.rejectReason}</p>}
                 {c.fee > 0 && !c.feePaid && c.stage !== 'REJECTED' && <p className="text-[12px] text-[#9A5B00] mt-2">Fee ₹{c.fee} unpaid — pay at the college fee counter; the certificate is issued once it is received.</p>}
                 {c.stage === 'READY' && <p className="text-[12px] text-[#0E7A5F] mt-2">Ready to collect from the college office.</p>}
-                {issued && (
+                {issued && c.certificate && (
                   <div className="flex gap-2 mt-3">
-                    <Button size="sm" onClick={() => void download(c)}>Download copy</Button>
-                    <Button size="sm" variant="secondary" onClick={() => void copyText(verifyLink(c), 'Verification link')}>Copy verification link</Button>
+                    <Button size="sm" onClick={() => void download({ id: c.certificate!.id, serialNo: c.certificate!.serialNo })}>Download signed PDF</Button>
+                    <Button size="sm" variant="secondary" onClick={() => void copyText(c.certificate!.verifyUrl, 'Verification link')}>Copy verification link</Button>
                   </div>
                 )}
+                {issued && !c.certificate && <p className="text-[12px] text-[#5A6577] mt-2">The signed copy is listed under My digital certificates above.</p>}
               </div>
             );
           })}

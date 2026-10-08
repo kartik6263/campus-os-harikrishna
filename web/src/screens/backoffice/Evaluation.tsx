@@ -1,867 +1,306 @@
-import { useState, useRef } from 'react';
-import {
-  Button, Input, Modal, InlineAlert, Spinner, StatusPill, Tabs, Toggle, toast,
-} from '../../components/ui';
-import {
-  useCreateBundle,
-  useEnterMarks,
-  useExamSession,
-  useMarksFoil,
-  useSessionList,
-} from '../../lib/examqueries';
-import { inst } from '../../lib/institution';
+import { useEffect, useMemo, useState } from 'react';
+import { Button, EmptyState, InlineAlert, Input, Modal, Select, Spinner, Tabs, toast } from '../../components/ui';
+import { ApiError } from '../../lib/api';
+import { downloadCSV } from '../../lib/export';
+import { useBundle, useEnterMarks, useExamCentres, useExamSession, useExamSessions, useFlaggedScripts, useModerateScript } from '../../lib/examqueries';
+import { useExaminers, useNewBundle, useSaveExaminer, useSessionBundles, useToggleExaminer, type BundleRow, type Examiner } from '../../lib/examconduct';
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 interface Props { onNavigate: (s: any) => void; onModule: (m: string) => void }
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-type BundleStatus = 'unassigned' | 'received' | 'under_eval' | 'submitted' | 'double_val' | 'moderated';
+/**
+ * Evaluation: answer-script bundles made up from the seating list and given
+ * to examiners on the panel, every examiner's marks entered against the
+ * foil, scripts where two examiners disagree sent to a moderator, and the
+ * panel itself. Every figure is the server's.
+ */
 
-interface BundleRow {
-  bundleId: string;
-  centreCode: string;
-  subject: string;
-  subjectCode: string;
-  examinerName: string;
-  examinerType: 'E1' | 'E2' | 'moderator';
-  status: BundleStatus;
-  studentCount: number;
-  hasFlagged: boolean;
+const errText = (e: unknown) => (e instanceof ApiError ? e.message : 'Could not reach the server.');
+const STATUS: Record<BundleRow['status'], { label: string; cls: string }> = {
+  UNASSIGNED: { label: 'Unassigned', cls: 'bg-[#EDEFF3] text-[#5A6577]' },
+  RECEIVED: { label: 'Received', cls: 'bg-[#EFF6FF] text-[#1D4ED8]' },
+  UNDER_EVALUATION: { label: 'With examiner', cls: 'bg-[#FEF9EC] text-[#8A6D1F]' },
+  SUBMITTED: { label: 'Marks submitted', cls: 'bg-[#D1FAE5] text-[#0E7A5F]' },
+  MODERATED: { label: 'Moderated', cls: 'bg-[#D1FAE5] text-[#0E7A5F]' },
+};
+const ROLE: Record<string, string> = { E1: 'First examiner', E2: 'Second examiner', MODERATOR: 'Moderator' };
+
+function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  return <div className={`bg-white border border-[#D3D8E0] rounded-[4px] ${className}`}>{children}</div>;
 }
 
-interface DVPair {
-  rollNo: string;
-  name: string;
-  subjectCode: string;
-  subjectName: string;
-  E1: number;
-  E2: number;
-  gap: number;
-  flagged: boolean;
-  resolved: boolean;
-  finalMark?: number;
-  resolution?: string;
-}
-
-interface ExaminerAssignment {
-  name: string;
-  type: 'E1' | 'E2' | 'moderator';
-  phone: string;
-}
-
-// ─── Initial Data ─────────────────────────────────────────────────────────────
-const INITIAL_BUNDLES: BundleRow[] = [
-  { bundleId: 'BDL/GWL04/BCA501/001', centreCode: 'DC-04', subject: 'Software Engineering', subjectCode: 'BCA501', examinerName: 'Dr. S.K. Pandey', examinerType: 'E1', status: 'submitted', studentCount: 42, hasFlagged: true },
-  { bundleId: 'BDL/GWL04/BCA501/002', centreCode: 'DC-04', subject: 'Software Engineering', subjectCode: 'BCA501', examinerName: 'Dr. R. Mishra', examinerType: 'E2', status: 'under_eval', studentCount: 38, hasFlagged: false },
-  { bundleId: 'BDL/GWL01/BCA502/001', centreCode: 'DC-01', subject: 'Database Management', subjectCode: 'BCA502', examinerName: 'Dr. P. Gupta', examinerType: 'E1', status: 'received', studentCount: 55, hasFlagged: false },
-  { bundleId: 'BDL/GWL01/BCA502/002', centreCode: 'DC-01', subject: 'Database Management', subjectCode: 'BCA502', examinerName: '', examinerType: 'E2', status: 'unassigned', studentCount: 55, hasFlagged: false },
-  { bundleId: 'BDL/GWL02/BCA503/001', centreCode: 'DC-02', subject: 'Computer Networks', subjectCode: 'BCA503', examinerName: 'Dr. A. Verma', examinerType: 'E1', status: 'submitted', studentCount: 48, hasFlagged: false },
-  { bundleId: 'BDL/GWL02/BCA503/002', centreCode: 'DC-02', subject: 'Computer Networks', subjectCode: 'BCA503', examinerName: '', examinerType: 'E2', status: 'unassigned', studentCount: 48, hasFlagged: false },
-  { bundleId: 'BDL/MRN01/BCA501/001', centreCode: 'MRN-01', subject: 'Software Engineering', subjectCode: 'BCA501', examinerName: 'Prof. K. Tiwari', examinerType: 'E1', status: 'under_eval', studentCount: 31, hasFlagged: false },
-  { bundleId: 'BDL/MRN01/BCA502/001', centreCode: 'MRN-01', subject: 'Database Management', subjectCode: 'BCA502', examinerName: 'Dr. S. Joshi', examinerType: 'E1', status: 'double_val', studentCount: 28, hasFlagged: true },
-];
-
-const INITIAL_DV_PAIRS: DVPair[] = [
-  { rollNo: '0342', name: 'Priya Sharma', subjectCode: 'BCA501', subjectName: 'Software Engineering', E1: 52, E2: 38, gap: 14, flagged: true, resolved: false },
-  { rollNo: '0357', name: 'Rahul Verma', subjectCode: 'BCA502', subjectName: 'Database Management', E1: 45, E2: 28, gap: 17, flagged: true, resolved: false },
-  { rollNo: '0364', name: 'Anjali Patel', subjectCode: 'BCA503', subjectName: 'Computer Networks', E1: 62, E2: 40, gap: 22, flagged: true, resolved: false },
-  { rollNo: '0371', name: 'Deepak Singh', subjectCode: 'BCA501', subjectName: 'Software Engineering', E1: 48, E2: 42, gap: 6, flagged: false, resolved: false },
-  { rollNo: '0385', name: 'Sunita Rao', subjectCode: 'BCA502', subjectName: 'Database Management', E1: 55, E2: 49, gap: 6, flagged: false, resolved: false },
-];
-
-const EXAMINERS = [
-  { name: 'Dr. S.K. Pandey', designation: 'Associate Professor', college: 'Model College, Demo City', subjects: 'BCA501, BCA504', bundlesAssigned: 2, status: 'Active' },
-  { name: 'Dr. R. Mishra', designation: 'Assistant Professor', college: 'Govt. Science College', subjects: 'BCA501, BCA502', bundlesAssigned: 1, status: 'Active' },
-  { name: 'Dr. P. Gupta', designation: 'Professor', college: 'Saraswati College, Demo City', subjects: 'BCA502, BCA503', bundlesAssigned: 1, status: 'Active' },
-  { name: 'Dr. A. Verma', designation: 'Associate Professor', college: 'Rani Durgavati PG College', subjects: 'BCA503, BCA505', bundlesAssigned: 1, status: 'Active' },
-  { name: 'Prof. K. Tiwari', designation: 'Professor', college: 'Govt. Degree College, Northfield', subjects: 'BCA501', bundlesAssigned: 1, status: 'Active' },
-  { name: 'Dr. S. Joshi', designation: 'Senior Examiner', college: 'JU Department of CS', subjects: 'BCA502, BCA506', bundlesAssigned: 1, status: 'Active' },
-];
-
-const MODERATION_CASES = [
-  { rollNo: '0357', name: 'Rahul Verma', subjectCode: 'BCA502', subjectName: 'Database Management', E1: 45, E2: 28, gap: 17, moderator: 'Dr. V.K. Srivastava', moderatorMark: null as number | null },
-  { rollNo: '0364', name: 'Anjali Patel', subjectCode: 'BCA503', subjectName: 'Computer Networks', E1: 62, E2: 40, gap: 22, moderator: null as string | null, moderatorMark: null as number | null },
-];
-
-const DV_THRESHOLD = 14;
-
-// ─── Status pill helper ────────────────────────────────────────────────────────
-function BundleStatusPill({ status }: { status: BundleStatus }) {
-  const cfg: Record<BundleStatus, { label: string; cls: string }> = {
-    unassigned: { label: 'Unassigned', cls: 'bg-[#F0F1F3] text-[#5A6577] border border-[#D3D8E0]' },
-    received: { label: 'Received', cls: 'bg-[#EBF3FF] text-[#1A56B0] border border-[#B3CCEE]' },
-    under_eval: { label: 'Under Evaluation', cls: 'bg-[#FDF3DF] text-[#8A6D1F] border border-[#E0C97A]' },
-    submitted: { label: 'Marks Submitted ✓', cls: 'bg-[#E8F6F2] text-[#0E7A5F] border border-[#9DD5C0]' },
-    double_val: { label: 'Pending Double Val.', cls: 'bg-[#FDF3DF] text-[#8A6D1F] border border-[#E0C97A]' },
-    moderated: { label: 'Moderated ✓', cls: 'bg-[#E8F6F2] text-[#0E7A5F] border border-[#9DD5C0]' },
-  };
-  const { label, cls } = cfg[status];
-  return <span className={`inline-flex items-center px-2 py-0.5 text-[12px] font-medium rounded-[2px] ${cls}`}>{label}</span>;
-}
-
-function SectionLabel({ label, action }: { label: string; action?: React.ReactNode }) {
-  return (
-    <div className="bg-[#EDEFF3] px-4 py-2 flex items-center justify-between border-b border-[#D3D8E0]">
-      <span className="text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">{label}</span>
-      {action}
-    </div>
-  );
-}
-
-// ─── Tab 1: Bundle Tracking ───────────────────────────────────────────────────
-function BundleTracking() {
-  const [bundles, setBundles] = useState<BundleRow[]>(INITIAL_BUNDLES);
-
-  const counts = {
-    total: 36,
-    received: 28,
-    under_eval: 14,
-    submitted: 8,
-    pending: 6,
-  };
-
-  function advanceStatus(bundleId: string) {
-    setBundles(prev => prev.map(b => {
-      if (b.bundleId !== bundleId) return b;
-      const next: Record<BundleStatus, BundleStatus> = {
-        unassigned: 'received',
-        received: 'under_eval',
-        under_eval: 'submitted',
-        submitted: 'double_val',
-        double_val: 'moderated',
-        moderated: 'moderated',
-      };
-      return { ...b, status: next[b.status] };
-    }));
-  }
-
-  function markGWL04Received() {
-    setBundles(prev => prev.map(b =>
-      b.centreCode === 'DC-04' && b.subjectCode === 'BCA501' && b.status === 'unassigned'
-        ? { ...b, status: 'received' }
-        : b
-    ));
-    toast.success('All DC-04 BCA501 bundles marked as received.');
-  }
-
-  const actionLabel: Partial<Record<BundleStatus, string>> = {
-    unassigned: 'Assign Examiner',
-    received: 'Start Evaluation',
-    under_eval: 'Submit Marks',
-  };
+export default function Evaluation(_props: Props) {
+  const sessions = useExamSessions();
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [tab, setTab] = useState('bundles');
+  useEffect(() => {
+    if (sessionId || !sessions.data?.length) return;
+    setSessionId((sessions.data.find((s) => s.status === 'EVALUATION' || s.status === 'IN_PROGRESS') ?? sessions.data[0]!).id);
+  }, [sessions.data, sessionId]);
+  const flagged = useFlaggedScripts(sessionId);
 
   return (
-    <div>
-      {/* Overview strip */}
-      <div className="flex gap-0 border-b border-[#D3D8E0]">
-        {[
-          { label: 'Total Bundles', value: counts.total, cls: '' },
-          { label: 'Received', value: counts.received, cls: 'text-[#1A56B0]' },
-          { label: 'Under Evaluation', value: counts.under_eval, cls: 'text-[#8A6D1F]' },
-          { label: 'Submitted', value: counts.submitted, cls: 'text-[#0E7A5F]' },
-          { label: 'Pending', value: counts.pending, cls: 'text-[#A8242C]' },
-        ].map((s, i) => (
-          <div key={i} className={`flex-1 px-4 py-3 ${i > 0 ? 'border-l border-[#D3D8E0]' : ''}`}>
-            <div className={`text-[22px] font-semibold ${s.cls || 'text-[#16264A]'}`}>{s.value}</div>
-            <div className="text-[11px] text-[#5A6577]">{s.label}</div>
-          </div>
-        ))}
+    <div className="flex flex-col h-full bg-[#EDEFF3]">
+      <div className="bg-white border-b border-[#D3D8E0] px-6 py-3 flex flex-wrap items-end gap-4 justify-between">
+        <div>
+          <h2 className="text-[16px] font-semibold text-[#16264A]">Evaluation & moderation</h2>
+          <p className="text-[12px] text-[#5A6577]">Bundles, examiners’ marks, double valuation and the examiner panel</p>
+        </div>
+        <div className="w-80">
+          <Select label="Sitting" value={sessionId ?? ''} onChange={(e) => setSessionId(e.target.value)}>
+            {(sessions.data ?? []).map((s) => <option key={s.id} value={s.id}>{s.name} · {s.status.replace(/_/g, ' ').toLowerCase()}</option>)}
+          </Select>
+        </div>
       </div>
-
-      {/* Bulk action */}
-      <div className="px-4 py-3 border-b border-[#D3D8E0] flex items-center justify-between">
-        <span className="text-[13px] text-[#5A6577]">Bulk action for DC-04 / BCA501 bundles</span>
-        <Button variant="secondary" size="sm" onClick={markGWL04Received}>Mark Received</Button>
-      </div>
-
-      {/* Table */}
-      <div className="overflow-x-auto">
-        <table className="w-full text-[13px]">
-          <thead>
-            <tr className="border-b border-[#D3D8E0] bg-[#EDEFF3]">
-              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">Bundle ID</th>
-              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">Centre</th>
-              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">Subject</th>
-              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">Examiner</th>
-              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">Status</th>
-              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {bundles.map((b, i) => (
-              <tr key={b.bundleId} className={`border-b border-[#D3D8E0] ${i % 2 === 0 ? '' : 'bg-[#FAFBFC]'}`}>
-                <td className="px-4 py-3 font-mono text-[12px] text-[#16264A]">{b.bundleId}</td>
-                <td className="px-4 py-3 text-[#5A6577]">{b.centreCode}</td>
-                <td className="px-4 py-3 text-[#16264A]">
-                  <div>{b.subject}</div>
-                  <div className="text-[11px] font-mono text-[#5A6577]">{b.subjectCode}</div>
-                </td>
-                <td className="px-4 py-3 text-[#16264A]">
-                  {b.examinerName || <span className="text-[#5A6577] italic">Unassigned</span>}
-                  {b.examinerName && <span className="ml-1.5 text-[11px] text-[#5A6577]">({b.examinerType})</span>}
-                </td>
-                <td className="px-4 py-3"><BundleStatusPill status={b.status} /></td>
-                <td className="px-4 py-3">
-                  {actionLabel[b.status] && (
-                    <Button size="sm" variant="secondary" onClick={() => advanceStatus(b.bundleId)}>
-                      {actionLabel[b.status]}
-                    </Button>
-                  )}
-                  {b.status === 'submitted' && b.hasFlagged && (
-                    <Button size="sm" variant="secondary" onClick={() => { advanceStatus(b.bundleId); toast.success('Bundle sent for double valuation.'); }}>
-                      Send for Double Val.
-                    </Button>
-                  )}
-                  {b.status === 'double_val' && (
-                    <Button size="sm" variant="secondary" onClick={() => { advanceStatus(b.bundleId); toast.success('Bundle sent to Moderation.'); }}>
-                      Send to Moderation
-                    </Button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="bg-white px-4"><Tabs tabs={[{ id: 'bundles', label: 'Bundles & marks' }, { id: 'moderation', label: `Double valuation${flagged.data?.length ? ` (${flagged.data.length})` : ''}` }, { id: 'panel', label: 'Examiner panel' }]} activeId={tab} onChange={setTab} /></div>
+      <div className="flex-1 overflow-y-auto p-4 md:p-6">
+        {sessions.isPending && <div className="flex justify-center py-16"><Spinner /></div>}
+        {sessions.error && <InlineAlert type="error">{errText(sessions.error)}</InlineAlert>}
+        {sessionId && tab === 'bundles' && <BundlesTab sessionId={sessionId} />}
+        {sessionId && tab === 'moderation' && <ModerationTab sessionId={sessionId} />}
+        {tab === 'panel' && <PanelTab />}
       </div>
     </div>
   );
 }
 
-// ─── Tab 2: Examiner Allocation ───────────────────────────────────────────────
-function ExaminerAllocation() {
-  const [assignments, setAssignments] = useState<Record<string, ExaminerAssignment>>({});
-  const [modalBundle, setModalBundle] = useState<BundleRow | null>(null);
-  const [form, setForm] = useState({ name: '', phone: '', type: 'E1' as 'E1' | 'E2' | 'moderator', confirmed: false });
+// ─── Bundles ──────────────────────────────────────────────────────────────────
 
-  const unassigned = INITIAL_BUNDLES.filter(b => b.status === 'unassigned');
-
-  function assignExaminer() {
-    if (!modalBundle || !form.name || !form.phone || !form.confirmed) return;
-    setAssignments(prev => ({ ...prev, [modalBundle.bundleId]: { name: form.name, type: form.type, phone: form.phone } }));
-    toast.success(`Dr. ${form.name} assigned as ${form.type} for ${modalBundle.bundleId}`);
-    setModalBundle(null);
-    setForm({ name: '', phone: '', type: 'E1', confirmed: false });
-  }
-
-  return (
-    <div>
-      <SectionLabel label="Unassigned Bundles" />
-      <div className="overflow-x-auto">
-        <table className="w-full text-[13px]">
-          <thead>
-            <tr className="border-b border-[#D3D8E0] bg-[#EDEFF3]">
-              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">Bundle ID</th>
-              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">Centre</th>
-              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">Subject</th>
-              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">Students</th>
-              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">Assignment</th>
-              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {unassigned.map((b, i) => {
-              const asgn = assignments[b.bundleId];
-              return (
-                <tr key={b.bundleId} className={`border-b border-[#D3D8E0] ${i % 2 === 0 ? '' : 'bg-[#FAFBFC]'}`}>
-                  <td className="px-4 py-3 font-mono text-[12px] text-[#16264A]">{b.bundleId}</td>
-                  <td className="px-4 py-3 text-[#5A6577]">{b.centreCode}</td>
-                  <td className="px-4 py-3 text-[#16264A]">
-                    <div>{b.subject}</div>
-                    <div className="text-[11px] font-mono text-[#5A6577]">{b.subjectCode}</div>
-                  </td>
-                  <td className="px-4 py-3 text-[#16264A]">{b.studentCount}</td>
-                  <td className="px-4 py-3">
-                    {asgn
-                      ? <span className="text-[#0E7A5F] font-medium">{asgn.name} ({asgn.type})</span>
-                      : <span className="text-[#5A6577] italic">Not assigned</span>
-                    }
-                  </td>
-                  <td className="px-4 py-3">
-                    <Button size="sm" variant="secondary" onClick={() => setModalBundle(b)}>Assign Examiner</Button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Examiner Directory */}
-      <SectionLabel label="Examiner Directory" />
-      <div className="overflow-x-auto">
-        <table className="w-full text-[13px]">
-          <thead>
-            <tr className="border-b border-[#D3D8E0] bg-[#EDEFF3]">
-              {['Name', 'Designation', 'College', 'Subjects', 'Bundles Assigned', 'Status'].map(h => (
-                <th key={h} className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {EXAMINERS.map((e, i) => (
-              <tr key={e.name} className={`border-b border-[#D3D8E0] ${i % 2 === 0 ? '' : 'bg-[#FAFBFC]'}`}>
-                <td className="px-4 py-3 font-medium text-[#16264A]">{e.name}</td>
-                <td className="px-4 py-3 text-[#5A6577]">{e.designation}</td>
-                <td className="px-4 py-3 text-[#5A6577]">{e.college}</td>
-                <td className="px-4 py-3 font-mono text-[12px] text-[#16264A]">{e.subjects}</td>
-                <td className="px-4 py-3 text-center text-[#16264A]">{e.bundlesAssigned}</td>
-                <td className="px-4 py-3">
-                  <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium rounded-[2px] bg-[#E8F6F2] text-[#0E7A5F] border border-[#9DD5C0]">{e.status}</span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Assign Modal */}
-      <Modal open={!!modalBundle} onClose={() => setModalBundle(null)} title="Assign Examiner"
-        footer={
-          <div className="flex gap-2 justify-end">
-            <Button variant="secondary" onClick={() => setModalBundle(null)}>Cancel</Button>
-            <Button variant="primary" onClick={assignExaminer} disabled={!form.name || !form.phone || !form.confirmed}>Assign</Button>
-          </div>
-        }
-      >
-        {modalBundle && (
-          <div className="space-y-4">
-            <div className="p-3 bg-[#EDEFF3] rounded-[2px] border border-[#D3D8E0] text-[12px]">
-              <div className="font-mono text-[#16264A]">{modalBundle.bundleId}</div>
-              <div className="text-[#5A6577]">{modalBundle.subject} — {modalBundle.centreCode}</div>
-            </div>
-            <Input label="Examiner Name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
-            <Input label="Mobile Number" className="font-mono" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
-            <div>
-              <label className="block text-[13px] font-medium text-[#16264A] mb-1.5">Examiner Type</label>
-              <div className="flex gap-3">
-                {(['E1', 'E2', 'moderator'] as const).map(t => (
-                  <label key={t} className="flex items-center gap-1.5 cursor-pointer text-[13px] text-[#16264A]">
-                    <input type="radio" name="examType" checked={form.type === t} onChange={() => setForm(f => ({ ...f, type: t }))} className="accent-[#E0952A]" />
-                    {t === 'E1' ? 'First Examiner' : t === 'E2' ? 'Second Examiner' : 'Moderator'}
-                  </label>
-                ))}
-              </div>
-            </div>
-            <label className="flex items-start gap-2 cursor-pointer">
-              <input type="checkbox" checked={form.confirmed} onChange={e => setForm(f => ({ ...f, confirmed: e.target.checked }))} className="mt-0.5 accent-[#E0952A]" />
-              <span className="text-[13px] text-[#16264A]">I confirm this examiner has the required subject specialisation for {modalBundle.subject}.</span>
-            </label>
-          </div>
-        )}
-      </Modal>
-    </div>
-  );
-}
-
-// ─── Tab 3: Marks Foil Entry ──────────────────────────────────────────────────
-function MarksEntry() {
-  const { current } = useSessionList();
-  const sessionId = current?.sessionId ?? null;
+function BundlesTab({ sessionId }: { sessionId: string }) {
   const session = useExamSession(sessionId);
-
-  const [bundleId, setBundleId] = useState<string | null>(null);
-  const { data: MARKS_FOIL, tolerance } = useMarksFoil(sessionId, bundleId);
-
-  const createBundle = useCreateBundle();
-  const enterMarks = useEnterMarks();
-
-  const [subject, setSubject] = useState<string | null>(null);
-  const selectedSubject = subject ?? MARKS_FOIL[0]?.subjectCode ?? '';
-  const setSelectedSubject = setSubject;
-
-  const [entryMode, setEntryMode] = useState<'E1' | 'E2'>('E1');
-  const [marksInput, setMarksInput] = useState<Record<string, number | null>>({});
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
-
-  const foil = MARKS_FOIL.find(f => f.subjectCode === selectedSubject) ?? MARKS_FOIL[0];
-  const students = foil?.bundles.flatMap(b => b.students) ?? [];
-  const maxExternal = foil?.maxExternal ?? 70;
-  const openBundle = foil?.bundles[0] ?? null;
-
-  /**
-   * Draws the scripts for this paper as a bundle for the chosen examiner.
-   *
-   * A bundle is made up from the seating list, so only candidates who
-   * actually sat at that centre get a script.
-   */
-  async function drawBundle() {
-    if (!foil) return;
-    try {
-      const b = await createBundle.mutateAsync({
-        paperId: foil.paperId,
-        centreCode: 'DC-04',
-        examinerName: `Examiner (${entryMode})`,
-        examinerRole: entryMode,
-      });
-      setBundleId(b.id);
-      setMarksInput({});
-      toast.success(`${b.bundleNo} drawn — ${b.scripts} script(s)`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not draw a bundle.');
-    }
-  }
-  void session;
-
-  function setMark(rollNo: string, val: string) {
-    const n = val === '' ? null : Number(val);
-    setMarksInput(prev => ({ ...prev, [rollNo]: n }));
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent, rollNo: string, idx: number) {
-    if (e.key === 'Tab') {
-      e.preventDefault();
-      const next = students[idx + 1];
-      if (next) inputRefs.current[next.rollNo]?.focus();
-    }
-  }
-
-  /** The readings typed so far, against the candidates they belong to. */
-  function pending() {
-    return students
-      .filter(s => marksInput[s.rollNo] !== undefined)
-      .map(s => ({ studentId: s.studentId, mark: marksInput[s.rollNo] ?? null }));
-  }
-
-  async function push(submit: boolean) {
-    if (!openBundle) {
-      toast.error('Draw a bundle first.');
-      return;
-    }
-    const marks = pending();
-    if (marks.length === 0) {
-      toast.error('Enter at least one mark.');
-      return;
-    }
-    setSaveState('saving');
-    try {
-      const r = await enterMarks.mutateAsync({ bundleId: openBundle.id, marks, submit });
-      setSaveState('saved');
-      if (submit && r.flagged > 0) {
-        toast.info(
-          `Submitted. ${r.flagged} script(s) differ by more than ${r.tolerance} marks and need a moderator.`,
-        );
-      } else {
-        toast.success(submit ? 'Marks submitted for double-valuation check.' : 'Draft saved.');
-      }
-    } catch (err) {
-      setSaveState('idle');
-      toast.error(err instanceof Error ? err.message : 'Could not save those marks.');
-    }
-  }
-
-  function saveDraft() {
-    void push(false);
-  }
-
-  function submitFinal() {
-    setConfirmOpen(false);
-    void push(true);
-  }
-  void tolerance;
-  void drawBundle;
-
-  const allFilled = students.every(s => marksInput[s.rollNo] !== undefined && marksInput[s.rollNo] !== null);
+  const bundles = useSessionBundles(sessionId);
+  const centres = useExamCentres(sessionId);
+  const examiners = useExaminers();
+  const create = useNewBundle();
+  const [making, setMaking] = useState(false);
+  const [f, setF] = useState({ paperId: '', centreCode: '', examinerId: '', examinerRole: 'E1' as 'E1' | 'E2' | 'MODERATOR' });
+  const [open, setOpen] = useState<string | null>(null);
+  const [paper, setPaper] = useState('');
+  const status = session.data?.status;
+  const canWork = status === 'IN_PROGRESS' || status === 'EVALUATION';
+  const rows = (bundles.data ?? []).filter((b) => !paper || b.paper.id === paper);
+  const seatedCentres = (centres.data ?? []).filter((c) => c.assigned > 0);
+  const active = (examiners.data ?? []).filter((e) => e.active);
+  const totals = useMemo(() => ({ scripts: rows.reduce((t, b) => t + b.scripts, 0), marked: rows.reduce((t, b) => t + b.marked, 0), flagged: rows.reduce((t, b) => t + b.flagged, 0) }), [rows]);
 
   return (
-    <div>
-      {/* Controls */}
-      <div className="px-4 py-3 border-b border-[#D3D8E0] flex items-center gap-6">
-        <div>
-          <label className="block text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider mb-1">Subject</label>
-          <select
-            value={selectedSubject}
-            onChange={e => { setSelectedSubject(e.target.value); setMarksInput({}); }}
-            className="border border-[#D3D8E0] rounded-[4px] px-3 py-1.5 text-[13px] text-[#16264A] bg-white focus:outline-none focus:border-[#16264A]"
-          >
-            {MARKS_FOIL.map(f => (
-              <option key={f.subjectCode} value={f.subjectCode}>{f.subjectCode} — {f.subjectName}</option>
-            ))}
-          </select>
+    <div className="flex flex-col gap-4">
+      {!canWork && status && <InlineAlert type="info">This sitting is at “{status.replace(/_/g, ' ').toLowerCase()}”. Bundles are made up and marked while it is in progress or under evaluation.</InlineAlert>}
+      <Card className="p-4 flex flex-wrap gap-3 items-end justify-between">
+        <div className="w-64">
+          <Select label="Paper" value={paper} onChange={(e) => setPaper(e.target.value)}>
+            <option value="">All papers</option>
+            {(session.data?.papers ?? []).map((p) => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+          </Select>
         </div>
-        <div>
-          <label className="block text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider mb-1">Examiner</label>
-          <div className="flex items-center gap-2">
-            <span className={`text-[13px] ${entryMode === 'E1' ? 'font-semibold text-[#16264A]' : 'text-[#5A6577]'}`}>First Examiner (E1)</span>
-            <Toggle on={entryMode === 'E2'} onChange={v => setEntryMode(v ? 'E2' : 'E1')} />
-            <span className={`text-[13px] ${entryMode === 'E2' ? 'font-semibold text-[#16264A]' : 'text-[#5A6577]'}`}>Second Examiner (E2)</span>
-          </div>
+        <p className="text-[12px] text-[#5A6577] flex-1">{rows.length} bundles · {totals.marked} of {totals.scripts} scripts marked{totals.flagged ? ` · ${totals.flagged} need a moderator` : ''}</p>
+        <div className="flex gap-2">
+          <Button variant="secondary" size="sm" disabled={!rows.length} onClick={() => downloadCSV(`bundles-${session.data?.code ?? 'sitting'}`, rows, [{ key: 'bundleNo', label: 'Bundle' }, { key: 'paper', label: 'Paper', value: (r) => r.paper.code }, { key: 'centre', label: 'Centre', value: (r) => r.centre.code }, { key: 'examinerName', label: 'Examiner' }, { key: 'examinerRole', label: 'Role' }, { key: 'scripts', label: 'Scripts' }, { key: 'marked', label: 'Marked' }, { key: 'flagged', label: 'Flagged' }, { key: 'status', label: 'Status' }])}>Export CSV</Button>
+          <Button size="sm" disabled={!canWork} onClick={() => { create.reset(); setF({ paperId: paper || session.data?.papers[0]?.id || '', centreCode: seatedCentres[0]?.code ?? '', examinerId: active[0]?.id ?? '', examinerRole: 'E1' }); setMaking(true); }}>Make up a bundle</Button>
         </div>
-        <div className="ml-auto flex gap-2">
-          <Button variant="secondary" onClick={saveDraft} loading={saveState === 'saving'}>Save as Draft</Button>
-          <Button variant="primary" onClick={() => setConfirmOpen(true)} disabled={!allFilled || saveState === 'saving'}>Submit Final Marks</Button>
-        </div>
-      </div>
-
-      {saveState === 'saved' && (
-        <div className="px-4 py-2 bg-[#E8F6F2] border-b border-[#9DD5C0] text-[13px] text-[#0E7A5F]">Marks saved successfully.</div>
+      </Card>
+      {bundles.isPending && <div className="flex justify-center py-12"><Spinner /></div>}
+      {bundles.error && <InlineAlert type="error">{errText(bundles.error)}</InlineAlert>}
+      {bundles.data && rows.length === 0 && <Card><EmptyState title="No bundles yet" description="Make up a bundle of a paper’s scripts at a centre and give it to an examiner on the panel." /></Card>}
+      {rows.length > 0 && (
+        <Card className="overflow-x-auto">
+          <table className="w-full text-[13px]">
+            <thead className="bg-[#F7F8FA]"><tr>{['Bundle', 'Paper', 'Centre', 'Examiner', 'Progress', 'Status', ''].map((h) => <th key={h} className="px-3 py-2 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">{h}</th>)}</tr></thead>
+            <tbody>
+              {rows.map((b) => (
+                <tr key={b.id} className="border-t border-[#EDEFF3]">
+                  <td className="px-3 py-2 font-mono text-[11px]">{b.bundleNo}</td>
+                  <td className="px-3 py-2">{b.paper.code}</td>
+                  <td className="px-3 py-2 text-[#5A6577]">{b.centre.code}</td>
+                  <td className="px-3 py-2">{b.examinerName}<p className="text-[11px] text-[#5A6577]">{ROLE[b.examinerRole]}</p></td>
+                  <td className="px-3 py-2">
+                    <div className="w-28 h-1.5 bg-[#EDEFF3] rounded-full overflow-hidden"><div className="h-full bg-[#0E7A5F]" style={{ width: `${b.scripts ? (b.marked / b.scripts) * 100 : 0}%` }} /></div>
+                    <p className="text-[11px] text-[#5A6577] mt-0.5">{b.marked}/{b.scripts}{b.flagged ? <span className="text-[#A8242C]"> · {b.flagged} flagged</span> : null}</p>
+                  </td>
+                  <td className="px-3 py-2"><span className={`text-[11px] font-semibold px-2 py-0.5 rounded-[2px] ${STATUS[b.status].cls}`}>{STATUS[b.status].label}</span></td>
+                  <td className="px-3 py-2 text-right"><button className="text-[12px] text-[#E0952A] cursor-pointer" onClick={() => setOpen(b.id)}>{b.status === 'SUBMITTED' || b.status === 'MODERATED' ? 'View foil' : 'Enter marks'}</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
       )}
 
-      {/* Table */}
-      <div className="overflow-x-auto">
-        <table className="w-full text-[13px]">
-          <thead>
-            <tr className="border-b border-[#D3D8E0] bg-[#EDEFF3]">
-              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">Roll No</th>
-              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">Name</th>
-              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">Max External</th>
-              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">Enter Marks ({entryMode})</th>
-              {entryMode === 'E2' && <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">E1 Score</th>}
-              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">Validation</th>
-            </tr>
-          </thead>
-          <tbody>
-            {students.map((s, idx) => {
-              const val = marksInput[s.rollNo];
-              const isOver = val !== null && val !== undefined && val > maxExternal;
-              const isNeg = val !== null && val !== undefined && val < 0;
-              const hasError = isOver || isNeg;
-              const internal = 24; // sample internal
-              const total = val !== null && val !== undefined && !hasError ? internal + val : null;
-              return (
-                <tr key={s.rollNo} className={`border-b border-[#D3D8E0] ${idx % 2 === 0 ? '' : 'bg-[#FAFBFC]'}`}>
-                  <td className="px-4 py-3 font-mono text-[12px] text-[#16264A]">{s.rollNo}</td>
-                  <td className="px-4 py-3 text-[#16264A]">{s.name}</td>
-                  <td className="px-4 py-3 text-[#5A6577]">{maxExternal}</td>
-                  <td className="px-4 py-3">
-                    <input
-                      ref={el => { inputRefs.current[s.rollNo] = el; }}
-                      type="number"
-                      min={0}
-                      max={maxExternal}
-                      value={val ?? ''}
-                      onChange={e => setMark(s.rollNo, e.target.value)}
-                      onKeyDown={e => handleKeyDown(e, s.rollNo, idx)}
-                      className={`w-24 border rounded-[4px] px-2 py-1 text-[13px] font-mono focus:outline-none ${hasError ? 'border-[#A8242C] text-[#A8242C]' : 'border-[#D3D8E0] text-[#16264A] focus:border-[#16264A]'}`}
-                    />
-                  </td>
-                  {entryMode === 'E2' && (
-                    <td className="px-4 py-3 font-mono text-[12px] text-[#5A6577]">{s.E1 ?? '—'}</td>
-                  )}
-                  <td className="px-4 py-3 text-[12px]">
-                    {hasError
-                      ? <span className="text-[#A8242C]">{isOver ? `Exceeds max (${maxExternal})` : 'Cannot be negative'}</span>
-                      : total !== null
-                        ? <span className="text-[#5A6577]">Total: <span className="font-semibold text-[#16264A]">{total}</span> / {foil.maxExternal + foil.maxInternal}</span>
-                        : <span className="text-[#5A6577]">—</span>
-                    }
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Confirm Modal */}
-      <Modal open={confirmOpen} onClose={() => setConfirmOpen(false)} title="Submit Final Marks"
-        footer={
-          <div className="flex gap-2 justify-end">
-            <Button variant="secondary" onClick={() => setConfirmOpen(false)}>Cancel</Button>
-            <Button variant="primary" onClick={submitFinal}>Confirm & Submit</Button>
-          </div>
-        }
-      >
-        <p className="text-[14px] text-[#16264A]">
-          Once submitted, marks are <strong>locked</strong> for double-valuation check. This action cannot be undone by examiners. Only the Exam Controller can recall submitted marks.
-        </p>
-        <div className="mt-3 p-3 bg-[#FDF3DF] border border-[#E0C97A] rounded-[2px] text-[13px] text-[#8A6D1F]">
-          {students.length} student records will be locked for {foil.subjectCode} ({entryMode}).
+      <Modal open={making} onClose={() => setMaking(false)} title="Make up a bundle"
+        footer={<><Button variant="secondary" size="sm" onClick={() => setMaking(false)}>Cancel</Button><Button size="sm" disabled={!f.paperId || !f.centreCode || !f.examinerId} loading={create.isPending} onClick={() => create.mutate(f, { onSuccess: (r) => { toast.success(`${r.bundleNo}: ${r.scripts} scripts`); setMaking(false); } })}>Make up bundle</Button></>}>
+        <div className="flex flex-col gap-3">
+          {create.isError && <InlineAlert type="error">{errText(create.error)}</InlineAlert>}
+          <Select label="Paper" value={f.paperId} onChange={(e) => setF({ ...f, paperId: e.target.value })}>{(session.data?.papers ?? []).map((p) => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}</Select>
+          <Select label="Centre" value={f.centreCode} onChange={(e) => setF({ ...f, centreCode: e.target.value })}>
+            {seatedCentres.length === 0 && <option value="">No centre has candidates seated</option>}
+            {seatedCentres.map((c) => <option key={c.code} value={c.code}>{c.code} — {c.name} ({c.assigned} seated)</option>)}
+          </Select>
+          <Select label="Examiner" value={f.examinerId} onChange={(e) => setF({ ...f, examinerId: e.target.value })}>
+            {active.length === 0 && <option value="">Add examiners to the panel first</option>}
+            {active.map((x) => <option key={x.id} value={x.id}>{x.name} · {x.institution}{x.subjects ? ` · ${x.subjects}` : ''}</option>)}
+          </Select>
+          <Select label="Reading" value={f.examinerRole} onChange={(e) => setF({ ...f, examinerRole: e.target.value as typeof f.examinerRole })}>
+            <option value="E1">First examiner</option><option value="E2">Second examiner (double valuation)</option><option value="MODERATOR">Moderator</option>
+          </Select>
+          <p className="text-[11px] text-[#5A6577]">Scripts come from the candidates seated at the centre for the paper; absentees are left out.</p>
         </div>
       </Modal>
+      {open && <FoilModal bundleId={open} onClose={() => setOpen(null)} />}
     </div>
   );
 }
 
-// ─── Tab 4: Double Valuation ──────────────────────────────────────────────────
-function DoubleValuation() {
-  const [dvPairs, setDvPairs] = useState<DVPair[]>(INITIAL_DV_PAIRS);
-  const [resolveStudent, setResolveStudent] = useState<string | null>(null);
-  const [resolutionMode, setResolutionMode] = useState<'average' | 'higher' | 'moderator' | 'manual'>('average');
-  const [manualMark, setManualMark] = useState<number | null>(null);
-
-  const resolving = resolveStudent ? dvPairs.find(d => d.rollNo === resolveStudent) : null;
-
-  function computeFinal(): number | null {
-    if (!resolving) return null;
-    if (resolutionMode === 'average') return Math.round((resolving.E1 + resolving.E2) / 2);
-    if (resolutionMode === 'higher') return Math.max(resolving.E1, resolving.E2);
-    if (resolutionMode === 'manual') return manualMark;
-    return null;
+function FoilModal({ bundleId, onClose }: { bundleId: string; onClose: () => void }) {
+  const { data: b, isPending, error } = useBundle(bundleId);
+  const save = useEnterMarks();
+  const [marks, setMarks] = useState<Record<string, string>>({});
+  const col = b?.examinerRole === 'E1' ? 'e1' : b?.examinerRole === 'E2' ? 'e2' : 'moderatorMark';
+  useEffect(() => {
+    if (b) setMarks(Object.fromEntries(b.scripts.map((s) => [s.studentId, s[col as 'e1'] === null ? '' : String(s[col as 'e1'])])));
+  }, [b, col]);
+  const locked = b?.status === 'SUBMITTED' || b?.status === 'MODERATED';
+  const max = b?.paper.maxExternal ?? 0;
+  const bad = Object.values(marks).some((v) => v !== '' && (!/^\d+$/.test(v) || Number(v) > max));
+  const blank = b ? b.scripts.filter((s) => !s.absent && (marks[s.studentId] ?? '') === '').length : 0;
+  function push(submit: boolean) {
+    if (!b) return;
+    save.mutate({ bundleId, submit, marks: b.scripts.filter((s) => !s.absent).map((s) => ({ studentId: s.studentId, mark: marks[s.studentId] === '' || marks[s.studentId] === undefined ? null : Number(marks[s.studentId]) })) },
+      { onSuccess: (r) => { toast.success(submit ? `Submitted — ${r.settled} settled, ${r.flagged} for moderation` : 'Draft saved'); if (submit) onClose(); } });
   }
-
-  function applyResolution() {
-    if (!resolveStudent) return;
-    const finalMark = resolutionMode === 'moderator' ? undefined : (computeFinal() ?? undefined);
-    setDvPairs(prev => prev.map(d =>
-      d.rollNo === resolveStudent
-        ? { ...d, resolved: true, finalMark, resolution: resolutionMode }
-        : d
-    ));
-    toast.success(resolutionMode === 'moderator'
-      ? `${resolving?.name} sent to Moderator.`
-      : `Resolution applied: Final mark ${finalMark} for ${resolving?.name}.`
-    );
-    setResolveStudent(null);
-    setResolutionMode('average');
-    setManualMark(null);
-  }
-
-  function sendAllToModeration() {
-    setDvPairs(prev => prev.map(d => d.flagged && !d.resolved ? { ...d, resolved: true, resolution: 'moderator' } : d));
-    toast.info('All flagged cases sent to Moderation.');
-  }
-
-  function gapColor(gap: number, flagged: boolean): string {
-    if (!flagged) return 'text-[#0E7A5F]';
-    if (gap === DV_THRESHOLD) return 'text-[#8A6D1F]';
-    return 'text-[#A8242C]';
-  }
-
   return (
-    <div>
-      <div className="px-4 py-3 border-b border-[#D3D8E0] flex items-center justify-between">
-        <div className="text-[13px] text-[#5A6577]">
-          Double valuation threshold: gap &gt; <strong className="text-[#16264A]">{DV_THRESHOLD} marks</strong> (20% of 70) triggers mandatory review.
-        </div>
-        <Button variant="secondary" size="sm" onClick={sendAllToModeration}>Send all flagged to Moderation</Button>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-[13px]">
-          <thead>
-            <tr className="border-b border-[#D3D8E0] bg-[#EDEFF3]">
-              {['Roll No', 'Name', 'Subject', 'E1 Score', 'E2 Score', 'Gap', 'Flag', 'Action'].map(h => (
-                <th key={h} className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {dvPairs.map((d, i) => (
-              <tr key={d.rollNo} className={`border-b border-[#D3D8E0] ${i % 2 === 0 ? '' : 'bg-[#FAFBFC]'}`}>
-                <td className="px-4 py-3 font-mono text-[12px] text-[#16264A]">{d.rollNo}</td>
-                <td className="px-4 py-3 text-[#16264A]">{d.name}</td>
-                <td className="px-4 py-3 text-[#5A6577]">
-                  <div className="font-mono text-[12px] text-[#16264A]">{d.subjectCode}</div>
-                  <div className="text-[11px]">{d.subjectName}</div>
-                </td>
-                <td className="px-4 py-3 font-mono text-[#16264A]">{d.E1}</td>
-                <td className="px-4 py-3 font-mono text-[#16264A]">{d.E2}</td>
-                <td className={`px-4 py-3 font-mono font-semibold ${gapColor(d.gap, d.flagged)}`}>{d.gap}</td>
-                <td className="px-4 py-3">
-                  {d.flagged
-                    ? d.resolved
-                      ? <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium rounded-[2px] bg-[#E8F6F2] text-[#0E7A5F] border border-[#9DD5C0]">
-                          Resolved{d.resolution === 'moderator' ? ' → Moderator' : d.finalMark !== undefined ? ` (Final: ${d.finalMark})` : ''}
-                        </span>
-                      : <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium rounded-[2px] bg-[#FDECEA] text-[#A8242C] border border-[#E8A8AB]">Flagged — requires resolution</span>
-                    : <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium rounded-[2px] bg-[#F0F1F3] text-[#5A6577] border border-[#D3D8E0]">Within tolerance</span>
-                  }
-                </td>
-                <td className="px-4 py-3">
-                  {d.flagged && !d.resolved && (
-                    <Button size="sm" variant="secondary" onClick={() => setResolveStudent(d.rollNo)}>Resolve</Button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Resolve Modal */}
-      <Modal open={!!resolveStudent} onClose={() => setResolveStudent(null)} title="Resolve Double Valuation Discrepancy"
-        footer={
-          <div className="flex gap-2 justify-end">
-            <Button variant="secondary" onClick={() => setResolveStudent(null)}>Cancel</Button>
-            <Button variant="primary" onClick={applyResolution}
-              disabled={resolutionMode === 'manual' && (manualMark === null || manualMark < 0 || manualMark > 70)}>
-              Apply Resolution
-            </Button>
+    <Modal open onClose={onClose} title={b ? `${b.bundleNo} · ${b.paper.code} out of ${b.paper.maxExternal}` : 'Bundle'} width="720px"
+      footer={<><Button variant="secondary" size="sm" onClick={onClose}>Close</Button>{!locked && b && <><Button variant="secondary" size="sm" disabled={bad} loading={save.isPending} onClick={() => push(false)}>Save draft</Button><Button size="sm" disabled={bad || blank > 0} loading={save.isPending} onClick={() => push(true)}>Submit marks</Button></>}</>}>
+      {isPending && <Spinner />}
+      {error && <InlineAlert type="error">{errText(error)}</InlineAlert>}
+      {b && (
+        <div className="flex flex-col gap-3">
+          {save.isError && <InlineAlert type="error">{errText(save.error)}</InlineAlert>}
+          <p className="text-[12px] text-[#5A6577]">{b.examinerName} · {ROLE[b.examinerRole]} · {b.centre.code}. Two readings differing by more than {b.tolerance} marks go to a moderator.{!locked && blank ? ` ${blank} still blank.` : ''}</p>
+          <div className="max-h-[55vh] overflow-y-auto border border-[#EDEFF3] rounded-[4px]">
+            <table className="w-full text-[13px]">
+              <thead className="bg-[#F7F8FA] sticky top-0"><tr>{['Roll', 'Candidate', 'E1', 'E2', 'Moderator', 'Final', ''].map((h) => <th key={h} className="px-3 py-2 text-left text-[11px] font-semibold text-[#5A6577] uppercase">{h}</th>)}</tr></thead>
+              <tbody>
+                {b.scripts.map((s) => {
+                  const cell = (c: 'e1' | 'e2' | 'moderatorMark') => (c === col && !locked && !s.absent
+                    ? <input value={marks[s.studentId] ?? ''} onChange={(e) => setMarks({ ...marks, [s.studentId]: e.target.value.replace(/\D/g, '') })} className={`w-16 h-8 px-2 border rounded-[4px] text-[13px] ${marks[s.studentId] && Number(marks[s.studentId]) > max ? 'border-[#A8242C]' : 'border-[#D3D8E0]'}`} />
+                    : <span className="text-[#5A6577]">{s[c] ?? '—'}</span>);
+                  return (
+                    <tr key={s.id} className="border-t border-[#EDEFF3]">
+                      <td className="px-3 py-1.5 font-mono text-[11px]">{s.rollNo}</td>
+                      <td className="px-3 py-1.5">{s.name}</td>
+                      <td className="px-3 py-1.5">{cell('e1')}</td>
+                      <td className="px-3 py-1.5">{cell('e2')}</td>
+                      <td className="px-3 py-1.5">{cell('moderatorMark')}</td>
+                      <td className="px-3 py-1.5 font-semibold">{s.absent ? 'AB' : s.finalMark ?? '—'}</td>
+                      <td className="px-3 py-1.5 text-[11px]">{s.absent ? <span className="text-[#5A6577]">Absent</span> : s.flagged ? <span className="text-[#A8242C]">Needs moderator</span> : null}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-        }
-      >
-        {resolving && (
-          <div className="space-y-4">
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ─── Double valuation ─────────────────────────────────────────────────────────
+
+function ModerationTab({ sessionId }: { sessionId: string }) {
+  const { data, isPending, error } = useFlaggedScripts(sessionId);
+  const moderate = useModerateScript();
+  const [marks, setMarks] = useState<Record<string, string>>({});
+  if (isPending) return <div className="flex justify-center py-16"><Spinner /></div>;
+  if (error || !data) return <InlineAlert type="error">{errText(error)}</InlineAlert>;
+  if (data.length === 0) return <Card><EmptyState title="Nothing to moderate" description="Every script whose two readings were compared agreed within the tolerance." /></Card>;
+  return (
+    <Card className="overflow-x-auto">
+      <p className="px-4 py-2 text-[12px] text-[#5A6577] border-b border-[#EDEFF3]">The two examiners differ by more than the tolerance. A moderator’s reading stands on its own.</p>
+      <table className="w-full text-[13px]">
+        <thead className="bg-[#F7F8FA]"><tr>{['Candidate', 'Paper', 'E1', 'E2', 'Gap', 'Moderator mark', ''].map((h) => <th key={h} className="px-3 py-2 text-left text-[11px] font-semibold text-[#5A6577] uppercase">{h}</th>)}</tr></thead>
+        <tbody>
+          {data.map((s) => {
+            const v = marks[s.id] ?? '';
+            const ok = /^\d+$/.test(v) && Number(v) <= s.maxExternal;
+            return (
+              <tr key={s.id} className="border-t border-[#EDEFF3]">
+                <td className="px-3 py-2">{s.name}<p className="font-mono text-[11px] text-[#5A6577]">{s.rollNo}</p></td>
+                <td className="px-3 py-2">{s.code}<p className="text-[11px] text-[#5A6577]">out of {s.maxExternal}</p></td>
+                <td className="px-3 py-2">{s.e1}</td>
+                <td className="px-3 py-2">{s.e2}</td>
+                <td className="px-3 py-2 text-[#A8242C] font-semibold">{s.gap} <span className="text-[11px] font-normal text-[#5A6577]">(tolerance {s.tolerance})</span></td>
+                <td className="px-3 py-2"><input value={v} onChange={(e) => setMarks({ ...marks, [s.id]: e.target.value.replace(/\D/g, '') })} className="w-16 h-8 px-2 border border-[#D3D8E0] rounded-[4px]" /></td>
+                <td className="px-3 py-2 text-right"><Button size="sm" disabled={!ok} loading={moderate.isPending && moderate.variables?.scriptId === s.id} onClick={() => moderate.mutate({ scriptId: s.id, mark: Number(v) }, { onSuccess: () => toast.success(`${s.code} for ${s.name} settled at ${v}`), onError: (e) => toast.error(errText(e)) })}>Settle</Button></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
+// ─── Examiner panel ───────────────────────────────────────────────────────────
+
+function PanelTab() {
+  const { data, isPending, error } = useExaminers();
+  const save = useSaveExaminer();
+  const toggle = useToggleExaminer();
+  const [form, setForm] = useState<(Omit<Examiner, 'id' | 'active' | 'bundles' | 'pending' | 'mobile' | 'email'> & { id?: string; mobile: string; email: string }) | null>(null);
+  const ok = !!form && form.name.trim().length >= 3 && form.designation.trim().length >= 2 && form.institution.trim().length >= 2;
+  if (isPending) return <div className="flex justify-center py-16"><Spinner /></div>;
+  if (error || !data) return <InlineAlert type="error">{errText(error)}</InlineAlert>;
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex justify-between items-center">
+        <p className="text-[12px] text-[#5A6577]">{data.filter((e) => e.active).length} active examiners. Bundles are given only to examiners on the active panel.</p>
+        <div className="flex gap-2">
+          <Button variant="secondary" size="sm" disabled={!data.length} onClick={() => downloadCSV('examiner-panel', data, [{ key: 'name', label: 'Name' }, { key: 'designation', label: 'Designation' }, { key: 'institution', label: 'Institution' }, { key: 'subjects', label: 'Subjects' }, { key: 'mobile', label: 'Mobile' }, { key: 'email', label: 'Email' }, { key: 'bundles', label: 'Bundles' }, { key: 'active', label: 'Active', value: (r) => (r.active ? 'Yes' : 'No') }])}>Export CSV</Button>
+          <Button size="sm" onClick={() => { save.reset(); setForm({ name: '', designation: '', institution: '', subjects: '', mobile: '', email: '' }); }}>Add examiner</Button>
+        </div>
+      </div>
+      {data.length === 0 && <Card><EmptyState title="No examiners" description="Add the evaluation panel before bundles go out." /></Card>}
+      {data.length > 0 && (
+        <Card className="overflow-x-auto">
+          <table className="w-full text-[13px]">
+            <thead className="bg-[#F7F8FA]"><tr>{['Examiner', 'Institution', 'Subjects', 'Contact', 'Bundles', ''].map((h) => <th key={h} className="px-3 py-2 text-left text-[11px] font-semibold text-[#5A6577] uppercase">{h}</th>)}</tr></thead>
+            <tbody>
+              {data.map((e) => (
+                <tr key={e.id} className={`border-t border-[#EDEFF3] ${e.active ? '' : 'opacity-60'}`}>
+                  <td className="px-3 py-2 font-medium text-[#16264A]">{e.name}<p className="text-[11px] font-normal text-[#5A6577]">{e.designation}</p></td>
+                  <td className="px-3 py-2 text-[#5A6577]">{e.institution}</td>
+                  <td className="px-3 py-2 text-[#5A6577]">{e.subjects || '—'}</td>
+                  <td className="px-3 py-2 text-[12px] text-[#5A6577]">{e.mobile ?? ''}{e.email ? <span className="block">{e.email}</span> : null}</td>
+                  <td className="px-3 py-2">{e.bundles}{e.pending ? <span className="text-[11px] text-[#8A6D1F]"> ({e.pending} pending)</span> : null}</td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
+                    <button className="text-[12px] text-[#E0952A] cursor-pointer mr-3" onClick={() => { save.reset(); setForm({ id: e.id, name: e.name, designation: e.designation, institution: e.institution, subjects: e.subjects, mobile: e.mobile ?? '', email: e.email ?? '' }); }}>Edit</button>
+                    <button className="text-[12px] cursor-pointer disabled:opacity-50" style={{ color: e.active ? '#A8242C' : '#0E7A5F' }} disabled={toggle.isPending} onClick={() => toggle.mutate({ id: e.id, active: !e.active }, { onSuccess: () => toast.success(e.active ? `${e.name} taken off the panel` : `${e.name} back on the panel`), onError: (x) => toast.error(errText(x)) })}>{e.active ? 'Remove from panel' : 'Restore'}</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+      <Modal open={!!form} onClose={() => setForm(null)} title={form?.id ? 'Edit examiner' : 'Add examiner'}
+        footer={<><Button variant="secondary" size="sm" onClick={() => setForm(null)}>Cancel</Button><Button size="sm" disabled={!ok} loading={save.isPending} onClick={() => save.mutate(form!, { onSuccess: () => { toast.success('Examiner saved'); setForm(null); } })}>Save</Button></>}>
+        {form && (
+          <div className="flex flex-col gap-3">
+            {save.isError && <InlineAlert type="error">{errText(save.error)}</InlineAlert>}
+            <Input label="Name" value={form.name} maxLength={120} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             <div className="grid grid-cols-2 gap-3">
-              <div className="border border-[#D3D8E0] rounded-[2px] p-3 text-center">
-                <div className="text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider mb-1">E1 Score</div>
-                <div className="text-[28px] font-semibold font-mono text-[#16264A]">{resolving.E1}</div>
-              </div>
-              <div className="border border-[#D3D8E0] rounded-[2px] p-3 text-center">
-                <div className="text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider mb-1">E2 Score</div>
-                <div className="text-[28px] font-semibold font-mono text-[#16264A]">{resolving.E2}</div>
-              </div>
+              <Input label="Designation" value={form.designation} maxLength={80} onChange={(e) => setForm({ ...form, designation: e.target.value })} />
+              <Input label="Subjects (codes)" value={form.subjects} maxLength={300} onChange={(e) => setForm({ ...form, subjects: e.target.value })} placeholder="BCA501, BCA502" />
             </div>
-            <div className="text-center text-[13px] text-[#5A6577]">
-              Gap: <span className={`font-semibold font-mono ${resolving.gap > DV_THRESHOLD ? 'text-[#A8242C]' : 'text-[#8A6D1F]'}`}>{resolving.gap} marks</span> — {resolving.subjectCode}
+            <Input label="Institution" value={form.institution} maxLength={160} onChange={(e) => setForm({ ...form, institution: e.target.value })} />
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Mobile" value={form.mobile} maxLength={16} onChange={(e) => setForm({ ...form, mobile: e.target.value })} />
+              <Input label="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
             </div>
-
-            <div>
-              <label className="block text-[13px] font-medium text-[#16264A] mb-2">Resolution Method</label>
-              <div className="space-y-2">
-                {[
-                  { id: 'average', label: `Average of E1 & E2`, detail: `→ ${Math.round((resolving.E1 + resolving.E2) / 2)} marks` },
-                  { id: 'higher', label: `Higher of E1 & E2`, detail: `→ ${Math.max(resolving.E1, resolving.E2)} marks (${resolving.E1 >= resolving.E2 ? 'E1' : 'E2'} wins)` },
-                  { id: 'moderator', label: 'Send to Moderator', detail: 'Assigns 3rd examiner for re-evaluation' },
-                  { id: 'manual', label: 'Enter Manual Mark', detail: 'Exam Controller override' },
-                ].map(opt => (
-                  <label key={opt.id} className="flex items-start gap-2 cursor-pointer">
-                    <input type="radio" name="resolution" value={opt.id} checked={resolutionMode === opt.id as any} onChange={() => setResolutionMode(opt.id as any)} className="mt-0.5 accent-[#E0952A]" />
-                    <span>
-                      <span className="text-[13px] text-[#16264A]">{opt.label}</span>
-                      <span className="ml-2 text-[12px] text-[#5A6577]">{opt.detail}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            {resolutionMode === 'manual' && (
-              <div>
-                <label className="block text-[13px] font-medium text-[#16264A] mb-1">Manual Mark (0–70)</label>
-                <input
-                  type="number" min={0} max={70}
-                  value={manualMark ?? ''}
-                  onChange={e => setManualMark(e.target.value === '' ? null : Number(e.target.value))}
-                  className="border border-[#D3D8E0] rounded-[4px] px-3 py-1.5 text-[13px] font-mono text-[#16264A] w-28 focus:outline-none focus:border-[#16264A]"
-                />
-              </div>
-            )}
           </div>
         )}
       </Modal>
-    </div>
-  );
-}
-
-// ─── Tab 5: Moderation ────────────────────────────────────────────────────────
-function Moderation() {
-  const [cases, setCases] = useState(MODERATION_CASES.map(c => ({ ...c })));
-  const [markInputs, setMarkInputs] = useState<Record<string, string>>({});
-
-  function applyModeratorDecision(rollNo: string) {
-    const val = Number(markInputs[rollNo]);
-    if (isNaN(val) || val < 0 || val > 70) return;
-    setCases(prev => prev.map(c => c.rollNo === rollNo ? { ...c, moderatorMark: val } : c));
-    toast.success(`Moderator decision applied: Final mark ${val} for roll no. ${rollNo}.`);
-  }
-
-  return (
-    <div>
-      <div className="px-4 py-3 border-b border-[#D3D8E0] text-[13px] text-[#5A6577]">
-        {cases.length} case(s) sent to moderation. Moderator marks finalize the result.
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-[13px]">
-          <thead>
-            <tr className="border-b border-[#D3D8E0] bg-[#EDEFF3]">
-              {['Student', 'Subject', 'E1', 'E2', 'Gap', 'Moderator', 'Moderator Mark', 'Action'].map(h => (
-                <th key={h} className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {cases.map((c, i) => (
-              <tr key={c.rollNo} className={`border-b border-[#D3D8E0] ${i % 2 === 0 ? '' : 'bg-[#FAFBFC]'}`}>
-                <td className="px-4 py-3">
-                  <div className="text-[#16264A] font-medium">{c.name}</div>
-                  <div className="font-mono text-[11px] text-[#5A6577]">{c.rollNo}</div>
-                </td>
-                <td className="px-4 py-3">
-                  <div className="font-mono text-[12px] text-[#16264A]">{c.subjectCode}</div>
-                  <div className="text-[11px] text-[#5A6577]">{c.subjectName}</div>
-                </td>
-                <td className="px-4 py-3 font-mono text-[#16264A]">{c.E1}</td>
-                <td className="px-4 py-3 font-mono text-[#16264A]">{c.E2}</td>
-                <td className="px-4 py-3 font-mono font-semibold text-[#A8242C]">{c.gap}</td>
-                <td className="px-4 py-3 text-[#16264A]">
-                  {c.moderator ?? <span className="text-[#5A6577] italic">To be assigned</span>}
-                </td>
-                <td className="px-4 py-3">
-                  {c.moderatorMark !== null
-                    ? <span className="font-mono font-semibold text-[#0E7A5F]">{c.moderatorMark}</span>
-                    : (
-                      <input
-                        type="number" min={0} max={70}
-                        value={markInputs[c.rollNo] ?? ''}
-                        onChange={e => setMarkInputs(prev => ({ ...prev, [c.rollNo]: e.target.value }))}
-                        placeholder="0–70"
-                        className="border border-[#D3D8E0] rounded-[4px] px-2 py-1 text-[13px] font-mono text-[#16264A] w-20 focus:outline-none focus:border-[#16264A]"
-                      />
-                    )
-                  }
-                </td>
-                <td className="px-4 py-3">
-                  {c.moderatorMark !== null
-                    ? <span className="text-[11px] text-[#0E7A5F]">Decision Applied ✓</span>
-                    : (
-                      <Button size="sm" variant="secondary"
-                        disabled={!markInputs[c.rollNo]}
-                        onClick={() => applyModeratorDecision(c.rollNo)}>
-                        Apply Decision
-                      </Button>
-                    )
-                  }
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-// ─── Root ─────────────────────────────────────────────────────────────────────
-export default function Evaluation({ onNavigate, onModule }: Props) {
-  const [activeTab, setActiveTab] = useState('bundle-tracking');
-
-  const tabs = [
-    { id: 'bundle-tracking', label: 'Bundle Tracking' },
-    { id: 'examiner-allocation', label: 'Examiner Allocation' },
-    { id: 'marks-entry', label: 'Marks Foil Entry' },
-    { id: 'double-valuation', label: 'Double Valuation' },
-    { id: 'moderation', label: 'Moderation' },
-  ];
-
-  return (
-    <div className="min-h-screen bg-[#EDEFF3]">
-      {/* Page header */}
-      <div className="bg-white border-b border-[#D3D8E0] px-6 py-4">
-        <div className="text-[11px] text-[#5A6577] mb-0.5">Resolion Campus OS — {inst().name} / Evaluation</div>
-        <h1 className="text-[20px] font-semibold text-[#16264A]">Evaluation Management</h1>
-        <div className="text-[13px] text-[#5A6577] mt-0.5">Nov–Dec 2024 (Odd Semester) · BCA / MCA / B.Sc.</div>
-      </div>
-
-      {/* Tabs */}
-      <div className="bg-white border-b border-[#D3D8E0] px-6">
-        <div className="flex gap-0">
-          {tabs.map(t => (
-            <button
-              key={t.id}
-              onClick={() => setActiveTab(t.id)}
-              className={`px-4 py-3 text-[13px] font-medium border-b-2 transition-colors cursor-pointer ${
-                activeTab === t.id
-                  ? 'border-[#16264A] text-[#16264A]'
-                  : 'border-transparent text-[#5A6577] hover:text-[#16264A]'
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="bg-white border border-[#D3D8E0] m-4 rounded-[2px] overflow-hidden">
-        {activeTab === 'bundle-tracking' && <BundleTracking />}
-        {activeTab === 'examiner-allocation' && <ExaminerAllocation />}
-        {activeTab === 'marks-entry' && <MarksEntry />}
-        {activeTab === 'double-valuation' && <DoubleValuation />}
-        {activeTab === 'moderation' && <Moderation />}
-      </div>
     </div>
   );
 }

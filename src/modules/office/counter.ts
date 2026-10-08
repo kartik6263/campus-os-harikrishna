@@ -6,6 +6,7 @@ import { prisma } from '../../db.js';
 import { ApiError, asyncHandler, validate } from '../../lib/http.js';
 import { nextInSeries, resolveStaffId } from './shared.js';
 import { recordFor } from '../itconsole/audit.js';
+import { allocate } from '../finance/ledger.js';
 
 export const counterRouter = Router();
 
@@ -65,6 +66,7 @@ counterRouter.get(
       receipts: receipts.map((r) => ({
         id: r.id,
         receiptNo: r.receiptNo,
+        paymentId: r.paymentId,
         studentId: r.student.id,
         enrolmentNo: r.student.enrolmentNo,
         studentName: r.student.name,
@@ -97,14 +99,16 @@ counterRouter.get(
     await resolveStaffId(req);
     const q = (req.query.q as string).trim();
 
+    // An exact enrolment or roll number wins; a name matching several students is not guessed.
+    const exact = await prisma.student.findFirst({ where: { OR: [{ enrolmentNo: { equals: q, mode: 'insensitive' } }, { rollNo: { equals: q, mode: 'insensitive' } }] }, select: { id: true } });
+    if (!exact) {
+      const named = await prisma.student.findMany({ where: { name: { contains: q, mode: 'insensitive' } }, select: { id: true, name: true, enrolmentNo: true, semester: true, programme: { select: { shortName: true } } }, take: 10 });
+      if (named.length > 1) {
+        throw ApiError.conflict(`${named.length === 10 ? 'Many' : named.length} students match — enter the enrolment number: ${named.map((n) => `${n.name} (${n.enrolmentNo})`).join(', ')}`, { matches: named });
+      }
+    }
     const student = await prisma.student.findFirst({
-      where: {
-        OR: [
-          { enrolmentNo: { equals: q, mode: 'insensitive' } },
-          { rollNo: { equals: q, mode: 'insensitive' } },
-          { name: { contains: q, mode: 'insensitive' } },
-        ],
-      },
+      where: exact ? { id: exact.id } : { name: { contains: q, mode: 'insensitive' } },
       include: {
         programme: { select: { shortName: true, name: true } },
         feeItems: { orderBy: { head: 'asc' } },
@@ -127,6 +131,8 @@ counterRouter.get(
       mobile: student.mobile,
       totals: { charged, paid, due: charged - paid },
       heads: student.feeItems.map((f) => ({
+        id: f.id,
+        term: f.term,
         head: f.head,
         amount: f.amount,
         paid: f.paid,
@@ -167,6 +173,8 @@ counterRouter.post(
         mode: MODE,
         instrument: z.string().max(60).optional(),
         remarks: z.string().max(300).optional(),
+        /** Pay this one head only, rather than the oldest dues first. */
+        feeItemId: z.string().min(1).optional(),
       })
       .refine((v) => !DEFERRED.has(v.mode) || !!v.instrument, {
         message: 'A cheque or demand draft needs its number',
@@ -182,6 +190,7 @@ counterRouter.post(
       mode: z.infer<typeof MODE>;
       instrument?: string;
       remarks?: string;
+      feeItemId?: string;
     };
 
     const student = await prisma.student.findUnique({
@@ -200,23 +209,8 @@ counterRouter.post(
     });
     const receiptNo = nextInSeries(prefix, existing.map((r) => r.receiptNo));
 
-    // Which heads this payment settles, oldest charge first.
-    const dues = await prisma.feeItem.findMany({
-      where: { studentId: student.id },
-      orderBy: [{ dueDate: 'asc' }, { head: 'asc' }],
-    });
-
-    const allocations: Array<{ id: string; add: number; head: string }> = [];
+    let applied: Array<{ head: string; amount: number }> = [];
     let remaining = body.amount;
-    for (const item of dues) {
-      if (remaining <= 0) break;
-      const owing = item.amount - item.paid;
-      if (owing <= 0) continue;
-      const add = Math.min(owing, remaining);
-      allocations.push({ id: item.id, add, head: item.head });
-      remaining -= add;
-    }
-
     const receipt = await prisma.$transaction(async (tx) => {
       const payment = await tx.payment.create({
         data: {
@@ -231,14 +225,11 @@ counterRouter.post(
         },
       });
 
-      // Only settled money moves the balance.
+      // Only settled money moves the balance — oldest due head first, each share recorded.
       if (!deferred) {
-        for (const a of allocations) {
-          await tx.feeItem.update({
-            where: { id: a.id },
-            data: { paid: { increment: a.add } },
-          });
-        }
+        const r = await allocate(tx, payment.id, student.id, body.amount, body.feeItemId ? { feeItemId: body.feeItemId } : {});
+        applied = r.applied.map((a) => ({ head: a.head, amount: a.amount }));
+        remaining = r.unallocated;
       }
 
       return tx.counterReceipt.create({
@@ -276,7 +267,7 @@ counterRouter.post(
       instrument: receipt.instrument,
       status: receipt.status,
       receivedAt: receipt.receivedAt,
-      appliedTo: deferred ? [] : allocations.map((a) => ({ head: a.head, amount: a.add })),
+      appliedTo: deferred ? [] : applied,
       unallocated: deferred ? body.amount : remaining,
     });
   }),
@@ -336,26 +327,9 @@ counterRouter.post(
       return;
     }
 
-    const dues = await prisma.feeItem.findMany({
-      where: { studentId: receipt.studentId },
-      orderBy: [{ dueDate: 'asc' }, { head: 'asc' }],
-    });
-
-    let remaining = receipt.amount;
-    const allocations: Array<{ id: string; add: number; head: string }> = [];
-    for (const item of dues) {
-      if (remaining <= 0) break;
-      const owing = item.amount - item.paid;
-      if (owing <= 0) continue;
-      const add = Math.min(owing, remaining);
-      allocations.push({ id: item.id, add, head: item.head });
-      remaining -= add;
-    }
-
+    let applied: Array<{ head: string; amount: number }> = [];
     const updated = await prisma.$transaction(async (tx) => {
-      for (const a of allocations) {
-        await tx.feeItem.update({ where: { id: a.id }, data: { paid: { increment: a.add } } });
-      }
+      applied = (await allocate(tx, receipt.paymentId, receipt.studentId, receipt.amount)).applied.map((a) => ({ head: a.head, amount: a.amount }));
       await tx.payment.update({ where: { id: receipt.paymentId }, data: { status: 'SUCCESS' } });
       return tx.counterReceipt.update({
         where: { id },
@@ -367,7 +341,7 @@ counterRouter.post(
       id: updated.id,
       status: updated.status,
       settledAt: updated.settledAt,
-      appliedTo: allocations.map((a) => ({ head: a.head, amount: a.add })),
+      appliedTo: applied,
     });
   }),
 );

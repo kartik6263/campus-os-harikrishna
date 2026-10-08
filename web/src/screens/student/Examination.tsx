@@ -15,6 +15,10 @@ interface ExamState {
   window: { open: boolean; late: boolean };
   term: string | null;
   subjects: Array<{ code: string; name: string }>;
+  /** Failed papers of earlier semesters not yet cleared; they go on the form as backlogs. */
+  backlogs?: Array<{ code: string; name: string; semester: number }>;
+  debarred?: { caseNo: string; session: string } | null;
+  dateSheet?: Array<{ code: string; name: string; date: string; time: string }>;
   form: null | {
     id: string; formNo: string; submittedAt: string; eligibility: 'PENDING' | 'ELIGIBLE' | 'SHORTAGE' | 'FEE_DUE' | 'CLEARED';
     computed: 'ELIGIBLE' | 'SHORTAGE' | 'FEE_DUE' | null; shortfalls: number; remarks: string | null; scrutinisedBy: string | null; scrutinisedAt: string | null;
@@ -83,6 +87,7 @@ function ExamForm({ s, onFees }: { s: ExamState; onFees: () => void }) {
   if (!s.session) return <div className="px-4"><EmptyState title="No examination scheduled yet" /></div>;
   const ses = s.session;
   const due = s.fee.charged - s.fee.paid;
+  const backlogs = s.backlogs ?? [];
 
   if (s.form) {
     const d = DECISION[s.form.eligibility] ?? DECISION.PENDING!;
@@ -108,8 +113,8 @@ function ExamForm({ s, onFees }: { s: ExamState; onFees: () => void }) {
         <div className="bg-white border-b border-[#D3D8E0]">
           {s.form.subjects.map(sub => (
             <div key={sub.code} className="px-4 py-3 border-b border-[#EDEFF3] last:border-0 flex justify-between">
-              <span className="text-[13px] text-[#16264A]"><span className="font-mono text-[#5A6577]">{sub.code}</span> {sub.name}</span>
-              {sub.held > 0 && <span className={`text-[12px] font-medium ${sub.eligible ? 'text-[#0E7A5F]' : 'text-[#A8242C]'}`}>{sub.attendance.toFixed(0)}%</span>}
+              <span className="text-[13px] text-[#16264A]"><span className="font-mono text-[#5A6577]">{sub.code}</span> {sub.name}{sub.kind === 'BACKLOG' && <span className="ml-2 text-[10px] font-semibold text-[#8A6D1F] bg-[#FEF9EC] px-1.5 py-0.5 rounded-[2px]">BACKLOG</span>}</span>
+              {sub.kind !== 'BACKLOG' && sub.held > 0 && <span className={`text-[12px] font-medium ${sub.eligible ? 'text-[#0E7A5F]' : 'text-[#A8242C]'}`}>{sub.attendance.toFixed(0)}%</span>}
             </div>
           ))}
         </div>
@@ -123,8 +128,9 @@ function ExamForm({ s, onFees }: { s: ExamState; onFees: () => void }) {
       <div className="bg-white px-4 py-4 border-b border-[#D3D8E0] space-y-1 text-[13px]">
         <p className="text-[#16264A]">Forms: {day(ses.formOpensOn)} – {day(ses.formClosesOn)} <span className="text-[#5A6577]">(with late fee until {day(ses.lateClosesOn)})</span></p>
         <p className="text-[#16264A]">Examinations: {day(ses.examStartsOn)} – {day(ses.examEndsOn)}</p>
-        <p className="text-[#16264A]">Fee: {inr(ses.fees.regular)}{s.window.late ? ` + late fee ${inr(ses.fees.late)}` : ''}</p>
+        <p className="text-[#16264A]">Fee: {inr(ses.fees.regular)}{s.window.late ? ` + late fee ${inr(ses.fees.late)}` : ''}{backlogs.length ? ` + ${backlogs.length} backlog paper${backlogs.length === 1 ? '' : 's'} × ${inr(ses.fees.backlog)}` : ''}</p>
       </div>
+      {s.debarred && <div className="p-4"><InlineAlert type="error">You are debarred from this sitting by unfair-means case {s.debarred.caseNo} ({s.debarred.session}). Contact the examination office.</InlineAlert></div>}
       {!s.window.open ? (
         <div className="p-4"><InlineAlert type="info">{ses.status === 'PLANNED' ? `Forms open on ${day(ses.formOpensOn)}.` : 'Examination forms are not being accepted now.'}</InlineAlert></div>
       ) : (
@@ -133,9 +139,15 @@ function ExamForm({ s, onFees }: { s: ExamState; onFees: () => void }) {
           <div className="bg-white border-b border-[#D3D8E0]">
             {s.subjects.length === 0 ? <p className="px-4 py-3 text-[13px] text-[#A8242C]">You are not enrolled in any subject this term. Contact your college office.</p> : s.subjects.map(sub => <div key={sub.code} className="px-4 py-3 border-b border-[#EDEFF3] last:border-0 text-[13px] text-[#16264A]"><span className="font-mono text-[#5A6577]">{sub.code}</span> {sub.name}</div>)}
           </div>
+          {backlogs.length > 0 && <>
+            <SectionHeader label="Backlog papers — re-sat with this form" />
+            <div className="bg-white border-b border-[#D3D8E0]">
+              {backlogs.map(b => <div key={b.code} className="px-4 py-3 border-b border-[#EDEFF3] last:border-0 text-[13px] text-[#16264A] flex justify-between"><span><span className="font-mono text-[#5A6577]">{b.code}</span> {b.name}</span><span className="text-[12px] text-[#8A6D1F]">semester {b.semester} · {inr(ses.fees.backlog)}</span></div>)}
+            </div>
+          </>}
           <div className="p-4">
             {s.window.late && <InlineAlert type="warning">The regular window has closed. A late fee of {inr(ses.fees.late)} applies.</InlineAlert>}
-            <Button className="w-full mt-3" disabled={!s.subjects.length} onClick={() => setConfirm(true)}>Submit examination form</Button>
+            <Button className="w-full mt-3" disabled={!s.subjects.length || !!s.debarred} onClick={() => setConfirm(true)}>Submit examination form</Button>
           </div>
         </>
       )}
@@ -144,7 +156,7 @@ function ExamForm({ s, onFees }: { s: ExamState; onFees: () => void }) {
         <div className="space-y-3 text-[13px]">
           {submit.isError && <InlineAlert type="error">{errText(submit.error)}</InlineAlert>}
           <p className="text-[#16264A]">{s.student.name} · {s.student.enrolmentNo} · {s.student.programme}, semester {s.student.semester}</p>
-          <p className="text-[#5A6577]">{inr(ses.fees.regular + (s.window.late ? ses.fees.late : 0))} will be added to your fee account. Pay it online or at the counter before {day(ses.lateClosesOn)}.</p>
+          <p className="text-[#5A6577]">{inr(ses.fees.regular + (s.window.late ? ses.fees.late : 0) + backlogs.length * ses.fees.backlog)} will be added to your fee account{backlogs.length ? `, including ${backlogs.length} backlog paper${backlogs.length === 1 ? '' : 's'}` : ''}. Pay it online or at the counter before {day(ses.lateClosesOn)}.</p>
           <label className="flex items-start gap-2 cursor-pointer"><input type="checkbox" checked={agree} onChange={e => setAgree(e.target.checked)} className="mt-0.5" /><span className="text-[#5A6577]">I declare that the particulars are correct and that I will abide by the examination rules. I understand that my form is subject to attendance and fee scrutiny.</span></label>
         </div>
       </Modal>
@@ -155,7 +167,17 @@ function ExamForm({ s, onFees }: { s: ExamState; onFees: () => void }) {
 function HallTicket({ s }: { s: ExamState }) {
   const t = s.hallTicket;
   if (!t) {
-    return <div className="px-4"><EmptyState title="Hall ticket not issued yet" description={!s.form ? 'Submit your examination form first.' : s.form.eligibility !== 'CLEARED' ? 'Your form has to be cleared at scrutiny, and your fees paid, before you are seated.' : 'You will be seated at a centre shortly; your hall ticket appears here then.'} /></div>;
+    return (
+      <div>
+        <div className="px-4"><EmptyState title="Hall ticket not issued yet" description={!s.form ? 'Submit your examination form first.' : s.form.eligibility !== 'CLEARED' ? 'Your form has to be cleared at scrutiny, and your fees paid, before you are seated.' : 'You will be seated at a centre shortly; your hall ticket appears here then.'} /></div>
+        {(s.dateSheet ?? []).length > 0 && <>
+          <SectionHeader label="Date sheet" />
+          <div className="bg-white border-b border-[#D3D8E0]">
+            {s.dateSheet!.map(p => <div key={p.code} className="px-4 py-3 border-b border-[#EDEFF3] last:border-0 flex justify-between gap-2 text-[13px]"><span className="text-[#16264A]"><span className="font-mono text-[#5A6577]">{p.code}</span> {p.name}</span><span className="text-[#5A6577] shrink-0">{day(p.date)} · {p.time}</span></div>)}
+          </div>
+        </>}
+      </div>
+    );
   }
   async function download() {
     await downloadPdf({
@@ -209,6 +231,11 @@ function Results() {
           </button>
           {open === r.sem && (
             <div className="overflow-x-auto bg-[#FAFBFC] border-t border-[#D3D8E0]">
+              <div className="flex justify-end px-3 py-2"><button className="text-[12px] text-[#E0952A] font-semibold cursor-pointer" onClick={() => void downloadPdf({
+                title: `Statement of marks — semester ${r.sem}`, subtitle: inst().name, reference: `SGPA ${r.sgpa.toFixed(2)} · CGPA ${r.cgpa.toFixed(2)}`, fileName: `marksheet-sem-${r.sem}`,
+                sections: [{ fields: [['Result', r.result], ['Declared', day(r.year)], ['SGPA', r.sgpa.toFixed(2)], ['CGPA', r.cgpa.toFixed(2)]] }, { table: { head: ['Code', 'Subject', 'Internal', 'External', 'Total', 'Grade'], body: r.subjects.map(sub => [sub.code, sub.name, sub.internal, sub.external, sub.total, sub.grade]) } }, { text: ['Provisional statement generated from the published result. The signed marksheet is issued by the university.'] }],
+                signatory: 'Controller of Examinations',
+              })}>Download marksheet (PDF)</button></div>
               <table className="w-full text-[12px]">
                 <thead><tr className="bg-[#EDEFF3]">{['Code', 'Subject', 'Int.', 'Ext.', 'Total', 'Grade'].map(h => <th key={h} className="text-left px-3 py-2 text-[10px] font-semibold text-[#5A6577] uppercase">{h}</th>)}</tr></thead>
                 <tbody>{r.subjects.map(sub => <tr key={sub.code} className="border-b border-[#EDEFF3]"><td className="px-3 py-2 font-mono text-[#5A6577]">{sub.code}</td><td className="px-3 py-2 text-[#16264A]">{sub.name}</td><td className="px-3 py-2 tabular-nums">{sub.internal}</td><td className="px-3 py-2 tabular-nums">{sub.external}</td><td className="px-3 py-2 tabular-nums font-semibold">{sub.total}</td><td className={`px-3 py-2 font-semibold ${sub.status === 'pass' ? 'text-[#0E7A5F]' : 'text-[#A8242C]'}`}>{sub.grade}</td></tr>)}</tbody>

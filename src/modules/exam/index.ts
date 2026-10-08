@@ -5,6 +5,7 @@ import { sessionsRouter } from './sessions.js';
 import { centresRouter } from './centres.js';
 import { evaluationRouter } from './evaluation.js';
 import { resultsRouter } from './results.js';
+import { conductRouter } from './conduct.js';
 
 /**
  * Phase 4 — the university examination back-office.
@@ -24,3 +25,4 @@ examRouter.use(sessionsRouter);
 examRouter.use(centresRouter);
 examRouter.use(evaluationRouter);
 examRouter.use(resultsRouter);
+examRouter.use(conductRouter);

@@ -5,7 +5,7 @@ import { prisma } from '../../db.js';
 import { ApiError, asyncHandler, validate } from '../../lib/http.js';
 import { requireAuth, requireRole } from '../../auth/middleware.js';
 import { requirePermission } from '../itconsole/permissions.js';
-import { ATTENDANCE_THRESHOLD } from '../student.js';
+import { currentPolicy } from '../attendance/policy.js';
 import { currentTerm, overallAttendance } from '../faculty/shared.js';
 import { hrRouter } from './hr.js';
 import { recordFor } from '../itconsole/audit.js';
@@ -121,7 +121,7 @@ governanceRouter.get(
       percentages.length === 0
         ? 0
         : Number((percentages.reduce((a, b) => a + b, 0) / percentages.length).toFixed(1));
-    const atRisk = percentages.filter((p) => p < ATTENDANCE_THRESHOLD).length;
+    const atRisk = percentages.filter((p) => p < currentPolicy().threshold).length;
 
     // The most recent published result per student, so a pass rate is not
     // inflated by counting every semester a student has ever cleared.
@@ -148,7 +148,7 @@ governanceRouter.get(
       programmes,
       averageAttendance,
       atRiskStudents: atRisk,
-      attendanceThreshold: ATTENDANCE_THRESHOLD,
+      attendanceThreshold: currentPolicy().threshold,
       fees: {
         charged,
         collected,

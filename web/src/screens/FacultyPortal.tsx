@@ -14,6 +14,8 @@ import StudentMentoring from './faculty/StudentMentoring';
 import ParentMessages from './faculty/ParentMessages';
 import MySubjects from './faculty/MySubjects';
 import SubjectAllocation from './shared/SubjectAllocation';
+import AttendanceAdmin from './shared/AttendanceAdmin';
+import TimetableManagement from './shared/TimetableManagement';
 import { inst } from '../lib/institution';
 
 interface Props {
@@ -25,6 +27,8 @@ type Module =
   | 'subjects'
   | 'allocation'
   | 'attendance'
+  | 'att-desk'
+  | 'dept-timetable'
   | 'marks'
   | 'timetable'
   | 'study-material'
@@ -37,6 +41,8 @@ const MODULE_LABELS: Record<Module, string> = {
   subjects: 'My Subjects',
   allocation: 'Subject Allocation',
   attendance: 'Attendance Marking',
+  'att-desk': 'Attendance Desk',
+  'dept-timetable': 'Department Timetable',
   marks: 'Internal Marks',
   timetable: 'Timetable',
   'study-material': 'Study Material',
@@ -134,6 +140,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: IconHome },
   { id: 'subjects', label: 'My Subjects', icon: IconUsers },
   { id: 'attendance', label: 'Attendance Marking', icon: IconCheck },
+  { id: 'att-desk', label: 'Attendance Desk', icon: IconCalendar },
   { id: 'marks', label: 'Internal Marks', icon: IconEdit },
   { id: 'timetable', label: 'Timetable', icon: IconCalendar },
   { id: 'study-material', label: 'Study Material', icon: IconUpload },
@@ -174,7 +181,7 @@ export default function FacultyPortal({ onNavigate }: Props) {
 
         {/* Nav */}
         <nav className="flex-1 py-2 overflow-y-auto">
-          {[...NAV_ITEMS, ...(faculty?.isHod ? [{ id: 'allocation' as Module, label: 'Subject Allocation (HOD)', icon: IconCalendar }] : [])].map((item) => {
+          {[...NAV_ITEMS, ...(faculty?.isHod ? [{ id: 'allocation' as Module, label: 'Subject Allocation (HOD)', icon: IconCalendar }, { id: 'dept-timetable' as Module, label: 'Department Timetable (HOD)', icon: IconCalendar }] : [])].map((item) => {
             const active = module === item.id;
             return (
               <button
@@ -239,6 +246,8 @@ export default function FacultyPortal({ onNavigate }: Props) {
           {module === 'subjects' && <MySubjects {...moduleProps} />}
           {module === 'allocation' && <SubjectAllocation />}
           {module === 'attendance' && <AttendanceMarking {...moduleProps} />}
+          {module === 'att-desk' && <AttendanceAdmin />}
+          {module === 'dept-timetable' && <TimetableManagement />}
           {module === 'marks' && <MarksEntry {...moduleProps} />}
           {module === 'timetable' && <FacultyTimetable {...moduleProps} />}
           {module === 'study-material' && <StudyMaterial {...moduleProps} />}

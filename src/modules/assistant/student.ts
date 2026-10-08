@@ -1,6 +1,7 @@
 import type { Request } from 'express';
 import { z } from 'zod';
-import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod';
+import type { GeminiTool } from '../../lib/gemini.js';
+import { tool } from './tool.js';
 import { env } from '../../env.js';
 
 /**
@@ -33,26 +34,25 @@ export const studentLookups = {
   results: (req: Request) => self<Result[]>(req, '/api/student/results'),
   timetable: (req: Request) => self<Timetable>(req, '/api/student/timetable'),
   learning: (req: Request) => self<unknown>(req, '/api/learning'),
+  standing: (req: Request) => self<unknown>(req, '/api/lifecycle/me'),
 };
 
-export function studentTools(req: Request, used: string[]) {
-  const run = (name: string, fn: () => Promise<unknown>) => async () => {
-    used.push(name);
-    return JSON.stringify(await fn());
-  };
+/** The student's own lookups, each one an endpoint of their portal. */
+export function studentTools(req: Request): GeminiTool[] {
   return [
-    betaZodTool({ name: 'my_attendance', description: 'Overall and per-subject attendance, the 75% threshold, and how many more classes are needed in each subject below it.', inputSchema: z.object({}), run: () => run('my_attendance', () => studentLookups.attendance(req))() }),
-    betaZodTool({ name: 'my_fees', description: 'Fee heads with amounts billed, paid and outstanding, and due dates.', inputSchema: z.object({}), run: () => run('my_fees', () => studentLookups.fees(req))() }),
-    betaZodTool({ name: 'my_results', description: 'Published semester results: SGPA, CGPA, outcome and subject grades.', inputSchema: z.object({}), run: () => run('my_results', () => studentLookups.results(req))() }),
-    betaZodTool({ name: 'my_timetable', description: 'The weekly class timetable, including cancelled classes and their reasons.', inputSchema: z.object({}), run: () => run('my_timetable', () => studentLookups.timetable(req))() }),
-    betaZodTool({ name: 'my_learning_plan', description: 'Subjects needing attention and the study material recommended for each.', inputSchema: z.object({}), run: () => run('my_learning_plan', () => studentLookups.learning(req))() }),
+    tool('my_attendance', 'Overall and per-subject attendance, the 75% threshold, and how many more classes are needed in each subject below it.', z.object({}), () => studentLookups.attendance(req)),
+    tool('my_fees', 'Fee heads with amounts billed, paid and outstanding, and due dates.', z.object({}), () => studentLookups.fees(req)),
+    tool('my_results', 'Published semester results: SGPA, CGPA, outcome and subject grades.', z.object({}), () => studentLookups.results(req)),
+    tool('my_timetable', 'The weekly class timetable, including cancelled classes and their reasons.', z.object({}), () => studentLookups.timetable(req)),
+    tool('my_learning_plan', 'Subjects needing attention and the study material recommended for each.', z.object({}), () => studentLookups.learning(req)),
+    tool('my_standing', 'Standing on the rolls (active, on a break, detained, graduated…), its history, open applications for a break, withdrawal or transfer, and no-dues clearance.', z.object({}), () => studentLookups.standing(req)),
   ];
 }
 
 export function studentSystemPrompt(institution: string, role: string) {
   return `You are the student helpdesk assistant inside Resolion Campus OS for ${institution}. You are speaking with ${role === 'PARENT' ? "a parent about their ward's records" : 'a student about their own records'}.
 
-Answer only from your tools, which return this person's own attendance, fees, results, timetable and learning plan. Never guess a figure. If asked about something the tools do not cover (hostel rooms, library, admissions, other students), say which section of the portal handles it.
+Answer only from your tools, which return this person's own attendance, fees, results, timetable, learning plan and standing on the rolls. Never guess a figure. If asked about something the tools do not cover (hostel rooms, library, admissions, other students), say which section of the portal handles it.
 
 Reply in the language the user writes in — English, Hindi, or Hinglish. Be warm, brief and specific: lead with the answer, then one practical next step (for example how many classes to attend to reach 75%, or where to pay a due). Money in ₹ with Indian grouping. Today is ${new Date().toDateString()} (${DAY[new Date().getDay()]}).`;
 }

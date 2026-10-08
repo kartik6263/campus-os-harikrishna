@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { prisma } from '../../db.js';
 import { ApiError, asyncHandler, validate } from '../../lib/http.js';
 import { resolveFacultyId } from '../../auth/middleware.js';
+import { attendedStatuses, currentPolicy } from '../attendance/policy.js';
+import { afterRollCall } from '../attendance/hooks.js';
 import {
   ATTENDANCE_LOCK_HOURS,
   isLocked,
@@ -12,6 +14,7 @@ import {
   attendanceFor,
 } from './shared.js';
 import { recordFor } from '../itconsole/audit.js';
+import { occurrences } from '../timetable/calendar.js';
 
 export const facultyAttendanceRouter = Router();
 
@@ -34,7 +37,7 @@ facultyAttendanceRouter.get(
 
     const [enrolments, records] = await Promise.all([
       prisma.enrolment.findMany({
-        where: { subjectId: session.subjectId },
+        where: { subjectId: session.subjectId, student: { status: 'ACTIVE' } },
         include: {
           student: { select: { id: true, rollNo: true, name: true, nameHi: true } },
         },
@@ -115,7 +118,7 @@ facultyAttendanceRouter.post(
     if (duplicates > 0) throw ApiError.badRequest('The same student appears twice in this sheet');
 
     const enrolled = await prisma.enrolment.findMany({
-      where: { subjectId: session.subjectId, studentId: { in: records.map((r) => r.studentId) } },
+      where: { subjectId: session.subjectId, student: { status: 'ACTIVE' }, studentId: { in: records.map((r) => r.studentId) } },
       select: { studentId: true },
     });
     const enrolledIds = new Set(enrolled.map((e) => e.studentId));
@@ -150,6 +153,8 @@ facultyAttendanceRouter.post(
     ]);
 
     const present = records.filter((r) => r.status !== 'ABSENT').length;
+
+    if (!draft) await afterRollCall(session.id);
 
     res.status(201).json({
       sessionId: session.id,
@@ -192,7 +197,7 @@ facultyAttendanceRouter.get(
       by: ['sessionId'],
       where: {
         sessionId: { in: sessions.map((s) => s.id) },
-        status: { in: ['PRESENT', 'LATE', 'EXCUSED'] },
+        status: { in: attendedStatuses(currentPolicy()) },
       },
       _count: { _all: true },
     });
@@ -234,17 +239,14 @@ facultyAttendanceRouter.get(
 async function slotFor(assignmentId: string, facultyId: string, date: Date, slotId?: string) {
   const assignment = await ownedAssignment(assignmentId, facultyId);
 
-  const index = date.getUTCDay();
-  const day = index === 0 ? null : (WEEKDAYS[index - 1] ?? null);
-
-  // A subject can meet more than once on a day (a lecture and a lab); the
-  // caller picks which, and the first of the day is the default.
-  const daySlots = day
-    ? await prisma.timetableSlot.findMany({
-        where: { facultyId, subjectId: assignment.subjectId, day, term: assignment.term },
-        orderBy: { startTime: 'asc' },
-      })
-    : [];
+  // A subject can meet more than once on a day (a lecture and a lab, or an
+  // extra class); the caller picks which, and the first of the day is the
+  // default. Dated changes apply: a cancelled or holiday class is marked so,
+  // a moved one carries its new room.
+  const iso = date.toISOString().slice(0, 10);
+  const daySlots = (await occurrences({ from: iso, to: iso, subjectIds: [assignment.subjectId], term: assignment.term }))
+    .filter((o) => o.regularFacultyId === facultyId || o.facultyId === facultyId)
+    .map((o) => ({ id: o.id, startTime: o.startTime, endTime: o.endTime, room: o.room, cancelled: o.status !== 'SCHEDULED' }));
   const slot = (slotId ? daySlots.find((s) => s.id === slotId) : daySlots[0]) ?? null;
   if (slotId && !slot) throw ApiError.badRequest('That class is not on your timetable for this day');
 
@@ -301,7 +303,7 @@ facultyAttendanceRouter.get(
 
     const [enrolments, records] = await Promise.all([
       prisma.enrolment.findMany({
-        where: { subjectId: assignment.subjectId, term: assignment.term },
+        where: { subjectId: assignment.subjectId, term: assignment.term, student: { status: 'ACTIVE' } },
         include: { student: { select: { id: true, rollNo: true, name: true, nameHi: true } } },
         orderBy: { student: { rollNo: 'asc' } },
       }),
@@ -441,6 +443,7 @@ facultyAttendanceRouter.post(
     const enrolled = await prisma.enrolment.findMany({
       where: {
         subjectId: assignment.subjectId,
+        student: { status: 'ACTIVE' },
         studentId: { in: body.records.map((r) => r.studentId) },
       },
       select: { studentId: true },
@@ -509,6 +512,8 @@ facultyAttendanceRouter.post(
       target: `${assignment.subject.code} ${date.toISOString().slice(0, 10)} ${slot.startTime}`,
       detail: `${present} present, ${body.records.length - present} absent`,
     });
+
+    if (!body.draft) await afterRollCall(open.id);
 
     res.status(201).json({
       sessionId: open.id,

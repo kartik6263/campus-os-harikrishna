@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../db.js';
 import { institutionOverview } from '../insights.js';
+import { attendanceSql, currentPolicy } from '../attendance/policy.js';
 
 /**
  * What the campus assistant may look up.
@@ -24,10 +25,11 @@ const collegeFilter = (scope: Scope, alias = 's') =>
 /** Attendance, fees owed, last result and risk for a set of students. */
 async function studentFacts(ids: string[]) {
   if (ids.length === 0) return new Map<string, { attendance: number | null; feesDue: number; cgpa: number | null; risk: { score: number; band: string } | null }>();
+  const att = attendanceSql(Prisma.raw('s.id'), currentPolicy());
   const rows = await prisma.$queryRaw<Array<{ id: string; expected: bigint; present: bigint; due: bigint; cgpa: number | null; score: number | null; band: string | null }>>`
     SELECT s.id,
-      (SELECT COUNT(*) FROM class_sessions cs JOIN enrolments e ON e."subjectId" = cs."subjectId" AND e."studentId" = s.id WHERE cs.date <= now())::bigint AS expected,
-      (SELECT COUNT(*) FROM attendance_records ar WHERE ar."studentId" = s.id AND ar.status IN ('PRESENT','LATE'))::bigint AS present,
+      ${att.held}::bigint AS expected,
+      ${att.attended}::bigint AS present,
       (SELECT COALESCE(SUM(f.amount - f.paid), 0) FROM fee_items f WHERE f."studentId" = s.id)::bigint AS due,
       (SELECT r.cgpa FROM semester_results r WHERE r."studentId" = s.id AND r.published ORDER BY r.semester DESC LIMIT 1) AS cgpa,
       (SELECT ra.score FROM risk_assessments ra WHERE ra."studentId" = s.id ORDER BY ra."assessedAt" DESC LIMIT 1) AS score,
@@ -114,6 +116,7 @@ export async function feeDefaulters(scope: Scope, limit = 15) {
 
 /** Attendance, fee collection and risk side by side, per college or per programme. */
 export async function compare(scope: Scope, by: 'college' | 'programme') {
+  const att = attendanceSql(Prisma.raw('s.id'), currentPolicy());
   const key = by === 'college' ? Prisma.sql`c.name` : Prisma.sql`p.name`;
   const rows = await prisma.$queryRaw<Array<{ name: string; students: bigint; expected: bigint; present: bigint; billed: bigint; paid: bigint; high: bigint }>>`
     SELECT ${key} AS name, COUNT(DISTINCT s.id)::bigint AS students,
@@ -124,8 +127,8 @@ export async function compare(scope: Scope, by: 'college' | 'programme') {
     JOIN colleges c ON c.id = s."collegeId"
     JOIN programmes p ON p.id = s."programmeId"
     LEFT JOIN LATERAL (
-      SELECT (SELECT COUNT(*) FROM class_sessions cs JOIN enrolments e ON e."subjectId" = cs."subjectId" AND e."studentId" = s.id WHERE cs.date <= now()) AS expected,
-             (SELECT COUNT(*) FROM attendance_records ar WHERE ar."studentId" = s.id AND ar.status IN ('PRESENT','LATE')) AS present
+      SELECT ${att.held} AS expected,
+             ${att.attended} AS present
     ) att ON true
     LEFT JOIN LATERAL (SELECT SUM(f.amount) AS billed, SUM(f.paid) AS paid FROM fee_items f WHERE f."studentId" = s.id) fee ON true
     LEFT JOIN LATERAL (SELECT ra.band::text AS band FROM risk_assessments ra WHERE ra."studentId" = s.id ORDER BY ra."assessedAt" DESC LIMIT 1) risk ON true
@@ -142,19 +145,20 @@ export async function compare(scope: Scope, by: 'college' | 'programme') {
 }
 
 /** Students under an attendance threshold — the detention list. */
-export async function lowAttendance(scope: Scope, threshold = 75, limit = 20) {
+export async function lowAttendance(scope: Scope, threshold = currentPolicy().threshold, limit = 20) {
+  const att = attendanceSql(Prisma.raw('s.id'), currentPolicy());
   const rows = await prisma.$queryRaw<Array<{ id: string; name: string; enrolmentNo: string; college: string; expected: bigint; present: bigint }>>`
     SELECT * FROM (
       SELECT s.id, s.name, s."enrolmentNo", c.name AS college,
-        (SELECT COUNT(*) FROM class_sessions cs JOIN enrolments e ON e."subjectId" = cs."subjectId" AND e."studentId" = s.id WHERE cs.date <= now())::bigint AS expected,
-        (SELECT COUNT(*) FROM attendance_records ar WHERE ar."studentId" = s.id AND ar.status IN ('PRESENT','LATE'))::bigint AS present
+        ${att.held}::bigint AS expected,
+        ${att.attended}::bigint AS present
       FROM students s JOIN colleges c ON c.id = s."collegeId" WHERE true ${collegeFilter(scope)}
     ) t WHERE t.expected > 0 AND (t.present::float / t.expected) * 100 < ${threshold}
     ORDER BY (t.present::float / t.expected) ASC LIMIT ${limit}`;
   const [count] = await prisma.$queryRaw<Array<{ n: bigint }>>`
     SELECT COUNT(*)::bigint AS n FROM (
-      SELECT (SELECT COUNT(*) FROM class_sessions cs JOIN enrolments e ON e."subjectId" = cs."subjectId" AND e."studentId" = s.id WHERE cs.date <= now()) AS expected,
-             (SELECT COUNT(*) FROM attendance_records ar WHERE ar."studentId" = s.id AND ar.status IN ('PRESENT','LATE')) AS present
+      SELECT ${att.held} AS expected,
+             ${att.attended} AS present
       FROM students s WHERE true ${collegeFilter(scope)}) t
     WHERE t.expected > 0 AND (t.present::float / t.expected) * 100 < ${threshold}`;
   return {

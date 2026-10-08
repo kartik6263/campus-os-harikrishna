@@ -25,7 +25,7 @@ intelligenceRouter.use(requireAuth);
 intelligenceRouter.use(requireRole('FACULTY', 'PRINCIPAL', 'REGISTRAR', 'ADMIN'));
 
 /** The cohort the caller may look at. */
-async function resolveScope(req: Request): Promise<{ studentIds: string[]; scope: string }> {
+export async function resolveScope(req: Request): Promise<{ studentIds: string[]; scope: string }> {
   const auth = req.auth!;
 
   // A lecturer sees the students they mentor, and nobody else's.

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { certificateSignature } from '../verify.js';
+import { ensureForRequest, verifyUrl } from '../certificates/issue.js';
 import { z } from 'zod';
 import { prisma } from '../../db.js';
 import { ApiError, asyncHandler, validate } from '../../lib/http.js';
@@ -40,6 +40,7 @@ function present(c: {
     programme: { shortName: string };
   };
   issuedBy: { name: string } | null;
+  digital?: { id: string; serialNo: string; signature: string; status: string } | null;
 }) {
   const daysLeft = Math.ceil((c.slaDeadline.getTime() - Date.now()) / 86_400_000);
   const open = c.stage !== 'DISPATCHED' && c.stage !== 'REJECTED';
@@ -67,9 +68,9 @@ function present(c: {
     issuedBy: c.issuedBy?.name ?? null,
     issuedAt: c.issuedAt,
     rejectReason: c.rejectReason,
-    // Printed in the certificate's QR code; the public verifier checks it.
-    signature: c.issuedAt && (c.stage === 'READY' || c.stage === 'DISPATCHED')
-      ? certificateSignature({ requestNo: c.requestNo, enrolmentNo: c.student.enrolmentNo, type: c.type, issuedAt: c.issuedAt })
+    // The signed certificate this request produced, once it is ready.
+    certificate: c.digital
+      ? { id: c.digital.id, serialNo: c.digital.serialNo, status: c.digital.status, verifyUrl: verifyUrl(c.digital.serialNo, c.digital.signature) }
       : null,
   };
 }
@@ -86,6 +87,7 @@ const INCLUDE = {
     },
   },
   issuedBy: { select: { name: true } },
+  digital: { select: { id: true, serialNo: true, signature: true, status: true } },
 };
 
 // ─── GET /api/office/certificates ─────────────────────────────────────────────
@@ -176,8 +178,8 @@ certificatesRouter.post(
 
     const now = new Date();
 
-    const [updated] = await prisma.$transaction([
-      prisma.certificateRequest.update({
+    const updated = await prisma.$transaction(async (tx) => {
+      const row = await tx.certificateRequest.update({
         where: { id },
         data: {
           stage: stage as 'READY',
@@ -186,8 +188,10 @@ certificatesRouter.post(
           ...(stage === 'READY' ? { issuedById: staffId, issuedAt: now } : {}),
         },
         include: INCLUDE,
-      }),
-      prisma.notification.create({
+      });
+      // Ready means issued: the signed certificate and its official PDF are made now, or not at all.
+      if (stage === 'READY') await ensureForRequest(id, tx);
+      await tx.notification.create({
         data: {
           studentId: request.studentId,
           kind: 'GENERAL',
@@ -206,8 +210,9 @@ certificatesRouter.post(
           urgent: stage === 'REJECTED',
           href: '/(tabs)/more',
         },
-      }),
-    ]);
+      });
+      return stage === 'READY' ? tx.certificateRequest.findUniqueOrThrow({ where: { id }, include: INCLUDE }) : row;
+    }, { timeout: 20_000 });
 
     res.json(present(updated));
   }),

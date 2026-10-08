@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, EmptyState, InlineAlert, Input, Modal, Select, Spinner, Tabs, toast } from '../../../components/ui';
 import { api, ApiError } from '../../../lib/api';
 import { downloadCSV } from '../../../lib/export';
-import { useCollection } from '../../../lib/records';
+import { ConcessionsPanel, LateFinesPanel, RefundsPanel, StructuresPanel, StudentLedger } from '../../shared/FeeDesk';
 import type { Screen } from '../../../lib/data';
 
 /**
@@ -58,7 +58,7 @@ export default function FeeFinance({ onNavigate }: { onNavigate?: (s: Screen) =>
         </div>
       </div>
       <div className="bg-white border-b border-[#D3D8E0] px-6">
-        <Tabs tabs={[{ id: 'dues', label: 'Dues & Defaulters' }, { id: 'payments', label: 'Collections' }, { id: 'charges', label: 'Raise Fee Charges' }, { id: 'refunds', label: 'Refunds' }]} activeId={tab} onChange={setTab} />
+        <Tabs tabs={[{ id: 'dues', label: 'Dues & Defaulters' }, { id: 'payments', label: 'Collections' }, { id: 'ledger', label: 'Student ledger' }, { id: 'structures', label: 'Fee structures' }, { id: 'charges', label: 'One-off charges' }, { id: 'concessions', label: 'Concessions' }, { id: 'refunds', label: 'Refunds' }, { id: 'fines', label: 'Late fines' }]} activeId={tab} onChange={setTab} />
       </div>
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
         <InlineAlert type="info">
@@ -68,7 +68,11 @@ export default function FeeFinance({ onNavigate }: { onNavigate?: (s: Screen) =>
         {tab === 'dues' && <DuesTab q={dues} />}
         {tab === 'payments' && <PaymentsTab />}
         {tab === 'charges' && <ChargesTab />}
-        {tab === 'refunds' && <RefundsTab />}
+        {tab === 'refunds' && <RefundsPanel />}
+        {tab === 'ledger' && <StudentLedger />}
+        {tab === 'structures' && <StructuresPanel />}
+        {tab === 'concessions' && <ConcessionsPanel />}
+        {tab === 'fines' && <LateFinesPanel />}
       </div>
     </div>
   );
@@ -306,74 +310,3 @@ function ChargesTab() {
   );
 }
 
-// ─── Refunds ─────────────────────────────────────────────────────────────────
-
-interface Refund { id: string; enrolmentNo: string; name: string; reason: string; amount: number; requestedOn: string; status: 'pending' | 'approved' | 'rejected' | 'paid'; note?: string; payoutRef?: string; paidOn?: string }
-
-function RefundsTab() {
-  const refunds = useCollection<Refund>('acad:fee-refunds', []);
-  const [adding, setAdding] = useState(false);
-  const [f, setF] = useState({ enrolmentNo: '', name: '', reason: '', amount: '' });
-  const [acting, setActing] = useState<{ r: Refund; kind: 'rejected' | 'paid' } | null>(null);
-  const [text, setText] = useState('');
-
-  function add() {
-    const amount = Number(f.amount);
-    if (!f.enrolmentNo.trim() || !f.name.trim() || !f.reason.trim() || !(amount > 0)) { toast.error('Fill every field'); return; }
-    refunds.add({ id: `RF-${Date.now().toString(36).toUpperCase()}`, enrolmentNo: f.enrolmentNo.trim(), name: f.name.trim(), reason: f.reason.trim(), amount, requestedOn: new Date().toISOString().slice(0, 10), status: 'pending' });
-    setF({ enrolmentNo: '', name: '', reason: '', amount: '' }); setAdding(false);
-    toast.success('Refund request recorded');
-  }
-  function finish() {
-    if (!acting) return;
-    if (!text.trim()) { toast.error(acting.kind === 'paid' ? 'Enter the payout reference (UTR / cheque no.)' : 'Give a reason'); return; }
-    refunds.update(acting.r.id, acting.kind === 'paid' ? { status: 'paid', payoutRef: text.trim(), paidOn: new Date().toISOString().slice(0, 10) } : { status: 'rejected', note: text.trim() });
-    toast.success(acting.kind === 'paid' ? 'Refund marked as paid' : 'Refund rejected');
-    setActing(null); setText('');
-  }
-
-  return (
-    <div className="bg-white border border-[#D3D8E0] rounded-[4px]">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[#D3D8E0]">
-        <p className="text-[14px] font-semibold text-[#16264A]">Refund register</p>
-        <div className="flex gap-2">
-          <Button size="sm" variant="secondary" disabled={!refunds.items.length} onClick={() => downloadCSV('fee-refunds', refunds.items.map(({ _rid, _key, _createdAt, _updatedAt, _studentId, _student, _tmp, ...r }) => r))}>Export CSV</Button>
-          <Button size="sm" onClick={() => setAdding(true)}>+ Record request</Button>
-        </div>
-      </div>
-      {refunds.isLoading ? <div className="flex justify-center py-12"><Spinner /></div> : refunds.items.length === 0 ? <div className="p-6"><EmptyState title="No refund requests" description="Record excess payments, withdrawals and caution-money refunds here, then approve and pay them." /></div> : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-[13px] min-w-[760px]">
-            <thead><tr className="border-b border-[#D3D8E0] bg-[#EDEFF3]">{['Student', 'Reason', 'Amount', 'Requested', 'Status', ''].map(h => <th key={h} className="text-left px-4 py-2.5 text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">{h}</th>)}</tr></thead>
-            <tbody>
-              {refunds.items.map(r => (
-                <tr key={r.id} className="border-b border-[#EDEFF3]">
-                  <td className="px-4 py-3"><p className="text-[#16264A] font-medium">{r.name}</p><p className="font-mono text-[11px] text-[#5A6577]">{r.enrolmentNo}</p></td>
-                  <td className="px-4 py-3 text-[#5A6577]">{r.reason}{r.note && <p className="text-[11px] text-[#A8242C]">{r.note}</p>}</td>
-                  <td className="px-4 py-3 tabular-nums text-[#16264A]">{inr(r.amount)}</td>
-                  <td className="px-4 py-3 text-[#5A6577]">{day(r.requestedOn)}</td>
-                  <td className="px-4 py-3 text-[12px]"><span className="font-semibold capitalize">{r.status}</span>{r.payoutRef && <p className="text-[11px] text-[#0E7A5F]">{r.payoutRef} · {day(r.paidOn ?? null)}</p>}</td>
-                  <td className="px-4 py-3 text-right whitespace-nowrap space-x-2">
-                    {r.status === 'pending' && <><Button size="sm" variant="ghost" onClick={() => setActing({ r, kind: 'rejected' })}>Reject</Button><Button size="sm" onClick={() => { refunds.update(r.id, { status: 'approved' }); toast.success('Refund approved'); }}>Approve</Button></>}
-                    {r.status === 'approved' && <Button size="sm" onClick={() => setActing({ r, kind: 'paid' })}>Mark paid</Button>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      <Modal open={adding} onClose={() => setAdding(false)} title="Record refund request" footer={<><Button size="sm" variant="secondary" onClick={() => setAdding(false)}>Cancel</Button><Button size="sm" onClick={add}>Save</Button></>}>
-        <div className="grid grid-cols-2 gap-3">
-          <Input label="Enrolment no." value={f.enrolmentNo} onChange={e => setF({ ...f, enrolmentNo: e.target.value })} />
-          <Input label="Student name" value={f.name} onChange={e => setF({ ...f, name: e.target.value })} />
-          <div className="col-span-2"><Input label="Reason" value={f.reason} onChange={e => setF({ ...f, reason: e.target.value })} placeholder="e.g. Excess payment of exam fee" /></div>
-          <Input label="Amount (₹)" inputMode="numeric" value={f.amount} onChange={e => setF({ ...f, amount: e.target.value.replace(/\D/g, '') })} />
-        </div>
-      </Modal>
-      <Modal open={!!acting} onClose={() => setActing(null)} title={acting?.kind === 'paid' ? 'Mark refund paid' : 'Reject refund'} footer={<><Button size="sm" variant="secondary" onClick={() => setActing(null)}>Cancel</Button><Button size="sm" onClick={finish}>Save</Button></>}>
-        <Input label={acting?.kind === 'paid' ? 'Payout reference (UTR / cheque no.)' : 'Reason'} value={text} onChange={e => setText(e.target.value)} />
-      </Modal>
-    </div>
-  );
-}

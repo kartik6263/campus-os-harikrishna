@@ -94,6 +94,11 @@ export interface ApiTodayClass {
   lockedAt: string | null;
   studentsPresent: number | null;
   totalStudents: number;
+  extra?: boolean;
+  /** Taking this class for a colleague. */
+  coveringFor?: string | null;
+  /** A colleague takes this one. */
+  coveredBy?: string | null;
 }
 
 export interface ApiRosterStudent {
@@ -620,7 +625,11 @@ export interface LegacyTodayClass {
   studentsPresent?: number;
   totalStudents: number;
   cancelled?: boolean;
+  cancelReason?: string | null;
   locked: boolean;
+  extra?: boolean;
+  coveringFor?: string | null;
+  coveredBy?: string | null;
 }
 
 /** `TODAY_CLASSES` as the dashboard expects it. */
@@ -640,8 +649,13 @@ export function useTodayClassList(date?: string) {
       studentsPresent: c.studentsPresent ?? undefined,
       totalStudents: c.totalStudents,
       cancelled: c.cancelled,
+      cancelReason: c.cancelReason,
       locked: c.locked,
+      extra: c.extra,
+      coveringFor: c.coveringFor ?? null,
+      coveredBy: c.coveredBy ?? null,
     })),
+    date: q.data?.date ?? null,
     day: q.data?.day ?? null,
     isPending: q.isPending,
     error: q.error,

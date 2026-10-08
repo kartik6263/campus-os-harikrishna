@@ -5,7 +5,6 @@ import { counterRouter } from './counter.js';
 import { certificatesRouter } from './certificates.js';
 import { examFormsRouter } from './examforms.js';
 import { financeRouter } from './finance.js';
-import { transportRouter } from './transport.js';
 import { studentsAdminRouter } from './students.js';
 import { curriculumRouter } from './curriculum.js';
 
@@ -26,6 +25,5 @@ officeRouter.use(counterRouter);
 officeRouter.use(certificatesRouter);
 officeRouter.use(examFormsRouter);
 officeRouter.use(financeRouter);
-officeRouter.use(transportRouter);
 officeRouter.use(studentsAdminRouter);
 officeRouter.use(curriculumRouter);

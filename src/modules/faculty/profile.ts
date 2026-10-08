@@ -5,6 +5,9 @@ import { prisma } from '../../db.js';
 import { ApiError, asyncHandler, validate } from '../../lib/http.js';
 import { resolveFacultyId } from '../../auth/middleware.js';
 import { attendanceFor, isLocked, istToday, lockedAt, requestedTerm } from './shared.js';
+import { attendedStatuses, currentPolicy } from '../attendance/policy.js';
+import { addDays, istDate, nextDateOf, occurrenceOf, occurrences } from '../timetable/calendar.js';
+import { makeChange, undoChange } from '../timetable/index.js';
 
 export const profileRouter = Router();
 
@@ -158,6 +161,9 @@ profileRouter.get(
       select: { subjectId: true, classLabel: true, kind: true },
     });
     const meta = new Map(assignments.map((a) => [a.subjectId, a]));
+    // The weekly grid shows each slot's next class: cancelled, moved or covered this week.
+    const ahead = await occurrences({ from: istDate(), to: addDays(istDate(), 7), facultyId, term });
+    const next = (s: (typeof slots)[number]) => ahead.find((o) => o.slotId === s.id && o.date === nextDateOf(s.day, s.endTime));
 
     const byDay = Object.fromEntries(
       DAYS.map((day) => [
@@ -173,9 +179,11 @@ profileRouter.get(
             subject: s.subject.name,
             classLabel: meta.get(s.subjectId)?.classLabel ?? null,
             kind: meta.get(s.subjectId)?.kind ?? 'THEORY',
-            room: s.room,
-            cancelled: s.cancelled,
-            cancelReason: s.cancelReason,
+            room: next(s)?.room ?? s.room,
+            cancelled: s.cancelled || (next(s) ? next(s)!.status !== 'SCHEDULED' : false),
+            cancelReason: s.cancelled ? s.cancelReason : next(s) && next(s)!.status !== 'SCHEDULED' ? next(s)!.note : null,
+            nextDate: next(s)?.date ?? null,
+            coveredBy: next(s) && next(s)!.facultyId !== facultyId ? next(s)!.faculty : null,
             hours: slotHours(s.startTime, s.endTime),
           })),
       ]),
@@ -213,11 +221,8 @@ profileRouter.get(
       return;
     }
 
-    const slots = await prisma.timetableSlot.findMany({
-      where: { facultyId, term, day },
-      include: { subject: { select: { id: true, code: true, name: true } } },
-      orderBy: { startTime: 'asc' },
-    });
+    const iso = date.toISOString().slice(0, 10);
+    const slots = await occurrences({ from: iso, to: iso, facultyId, term });
 
     const [sessions, assignments] = await Promise.all([
       prisma.classSession.findMany({
@@ -247,7 +252,7 @@ profileRouter.get(
         by: ['sessionId'],
         where: {
           sessionId: { in: sessions.map((s) => s.id) },
-          status: { in: ['PRESENT', 'LATE', 'EXCUSED'] },
+          status: { in: attendedStatuses(currentPolicy()) },
         },
         _count: { _all: true },
       });
@@ -265,13 +270,18 @@ profileRouter.get(
           time: `${slot.startTime}–${slot.endTime}`,
           startTime: slot.startTime,
           endTime: slot.endTime,
-          code: slot.subject.code,
-          subject: slot.subject.name,
+          code: slot.code,
+          subject: slot.subject,
           classLabel: meta.get(slot.subjectId)?.classLabel ?? null,
           kind: meta.get(slot.subjectId)?.kind ?? 'THEORY',
           room: slot.room,
-          cancelled: slot.cancelled,
-          cancelReason: slot.cancelReason,
+          cancelled: slot.status !== 'SCHEDULED',
+          cancelReason: slot.status !== 'SCHEDULED' ? slot.note : null,
+          extra: slot.kind === 'EXTRA',
+          /** Taking this class for a colleague. */
+          coveringFor: slot.facultyId === facultyId && slot.regularFacultyId !== facultyId ? slot.regularFaculty : null,
+          /** A colleague takes this one. */
+          coveredBy: slot.regularFacultyId === facultyId && slot.facultyId !== facultyId ? slot.faculty : null,
           attendanceMarked: session?.markedAt != null,
           markedAt: session?.markedAt ?? null,
           locked: isLocked(session?.markedAt ?? null),
@@ -303,21 +313,20 @@ profileRouter.post(
     const { slotId } = req.params as { slotId: string };
     const { date: dateParam } = req.body as { date?: string };
 
-    const slot = await prisma.timetableSlot.findUnique({
-      where: { id: slotId },
-      include: { subject: { select: { id: true, code: true, name: true } } },
-    });
+    const date = dayStart(dateParam ? new Date(`${dateParam}T00:00:00.000Z`) : istToday());
+    // A weekly slot or an extra class, as it stands on that date: cancelled, moved, or covered.
+    const occ = await occurrenceOf(slotId, date.toISOString().slice(0, 10));
+    const known = await prisma.timetableSlot.findUnique({ where: { id: slotId }, select: { day: true, facultyId: true } });
 
-    if (!slot || slot.facultyId !== facultyId) {
+    if (!occ) {
+      if (known && known.facultyId === facultyId) throw ApiError.badRequest(`That slot runs on ${known.day}, not the date supplied`);
       throw ApiError.notFound('No such slot on your timetable');
     }
-    if (slot.cancelled) throw ApiError.badRequest('That class is cancelled');
-
-    const date = dayStart(dateParam ? new Date(`${dateParam}T00:00:00.000Z`) : istToday());
-
-    if (weekdayOf(date) !== slot.day) {
-      throw ApiError.badRequest(`That slot runs on ${slot.day}, not the date supplied`);
+    if (occ.facultyId !== facultyId && occ.regularFacultyId !== facultyId) {
+      throw ApiError.notFound('No such slot on your timetable');
     }
+    if (occ.status !== 'SCHEDULED') throw ApiError.badRequest(occ.status === 'HOLIDAY' ? `That day is a holiday (${occ.note})` : 'That class is cancelled');
+    const slot = { subjectId: occ.subjectId, startTime: occ.startTime, endTime: occ.endTime, room: occ.room, subject: { code: occ.code, name: occ.subject } };
 
     const faculty = await prisma.faculty.findUniqueOrThrow({
       where: { id: facultyId },
@@ -363,11 +372,10 @@ profileRouter.post(
 // ─── POST /api/faculty/slots/:id/cancel ───────────────────────────────────────
 
 /**
- * Cancels a class.
- *
- * The slot itself carries the flag, so the students' own timetable shows it
- * too — the lecturer and the class are looking at one row, not two. With
- * `notify`, every enrolled student also gets a notification.
+ * Cancels the next class of a weekly slot — this week's, not every week's.
+ * The change is dated, so next week the class is back on its own; the
+ * timetable module (/api/timetable/changes) cancels any chosen date, or
+ * reschedules, moves or hands a class to a substitute.
  */
 profileRouter.post(
   '/slots/:id/cancel',
@@ -377,86 +385,51 @@ profileRouter.post(
     z.object({
       reason: z.string().min(10, 'Say why, in at least ten characters').max(300),
       notify: z.boolean().default(true),
+      date: z.string().date().optional(),
     }),
   ),
   asyncHandler(async (req, res) => {
     const facultyId = await resolveFacultyId(req);
     const { id } = req.params as { id: string };
-    const { reason, notify } = req.body as { reason: string; notify: boolean };
+    const { reason, notify, date } = req.body as { reason: string; notify: boolean; date?: string };
 
-    const slot = await prisma.timetableSlot.findUnique({
-      where: { id },
-      include: { subject: { select: { id: true, code: true, name: true } } },
-    });
-
-    if (!slot || slot.facultyId !== facultyId) {
-      throw ApiError.notFound('No such slot on your timetable');
-    }
+    const slot = await prisma.timetableSlot.findUnique({ where: { id }, include: { subject: { select: { code: true } } } });
+    if (!slot || slot.facultyId !== facultyId) throw ApiError.notFound('No such slot on your timetable');
     if (slot.cancelled) throw ApiError.conflict('That class is already cancelled');
 
-    const now = new Date();
-
-    const students = notify
-      ? await prisma.enrolment.findMany({
-          where: { subjectId: slot.subjectId, term: slot.term },
-          select: { studentId: true },
-        })
-      : [];
-
-    await prisma.$transaction([
-      prisma.timetableSlot.update({
-        where: { id },
-        data: { cancelled: true, cancelReason: reason, cancelledAt: now },
-      }),
-      ...(students.length > 0
-        ? [
-            prisma.notification.createMany({
-              data: students.map((e) => ({
-                studentId: e.studentId,
-                kind: 'GENERAL' as const,
-                title: `Class cancelled — ${slot.subject.code}`,
-                titleHi: `कक्षा रद्द — ${slot.subject.code}`,
-                body: `${slot.subject.name} (${slot.startTime}–${slot.endTime}) is cancelled. ${reason}`,
-                href: '/timetable',
-              })),
-            }),
-          ]
-        : []),
-    ]);
-
-    res.json({
-      slotId: slot.id,
-      code: slot.subject.code,
-      cancelled: true,
-      cancelReason: reason,
-      cancelledAt: now,
-      notified: students.length,
-    });
+    const on = date ?? nextDateOf(slot.day, slot.endTime);
+    const { change, notified } = await makeChange(req, { kind: 'CANCEL', slotId: slot.id, date: on, reason, notify });
+    res.json({ slotId: slot.id, code: slot.subject.code, date: on, changeId: change.id, cancelled: true, cancelReason: reason, cancelledAt: change.createdAt, notified });
   }),
 );
 
 // ─── POST /api/faculty/slots/:id/restore ──────────────────────────────────────
 
-/** Puts a cancelled class back on the timetable. */
+/** Puts a cancelled class back: the next cancelled date of this slot, or a slot suspended outright. */
 profileRouter.post(
   '/slots/:id/restore',
   validate('params', z.object({ id: z.string().min(1) })),
+  validate('body', z.object({ date: z.string().date().optional() }).default({})),
   asyncHandler(async (req, res) => {
     const facultyId = await resolveFacultyId(req);
     const { id } = req.params as { id: string };
+    const { date } = req.body as { date?: string };
 
     const slot = await prisma.timetableSlot.findUnique({ where: { id } });
-    if (!slot || slot.facultyId !== facultyId) {
-      throw ApiError.notFound('No such slot on your timetable');
+    if (!slot || slot.facultyId !== facultyId) throw ApiError.notFound('No such slot on your timetable');
+
+    const cancel = await prisma.timetableChange.findFirst({
+      where: { slotId: slot.id, kind: 'CANCEL', ...(date ? { date } : { date: { gte: istDate() } }) },
+      orderBy: { date: 'asc' },
+    });
+    if (cancel) {
+      await undoChange(req, cancel.id);
+      res.json({ slotId: slot.id, date: cancel.date, cancelled: false });
+      return;
     }
     if (!slot.cancelled) throw ApiError.conflict('That class is not cancelled');
-
-    const updated = await prisma.timetableSlot.update({
-      where: { id },
-      data: { cancelled: false, cancelReason: null, cancelledAt: null },
-    });
-
-    res.json({ slotId: updated.id, cancelled: false });
+    await prisma.timetableSlot.update({ where: { id }, data: { cancelled: false, cancelReason: null, cancelledAt: null } });
+    res.json({ slotId: slot.id, cancelled: false });
   }),
 );
 

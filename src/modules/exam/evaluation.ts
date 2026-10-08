@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../../db.js';
 import { ApiError, asyncHandler, validate } from '../../lib/http.js';
+import { candidates as paperCandidates } from './conduct.js';
 import { nextInSeries, requireStatus, resolveExamStaffId, settleScript, toleranceFor } from './shared.js';
 
 export const evaluationRouter = Router();
@@ -22,7 +23,9 @@ evaluationRouter.post(
     'body',
     z.object({
       centreCode: z.string().min(1),
-      examinerName: z.string().min(2).max(120),
+      examinerName: z.string().min(2).max(120).optional(),
+      /** An examiner from the panel; their name goes on the bundle. */
+      examinerId: z.string().min(1).optional(),
       examinerRole: z.enum(['E1', 'E2', 'MODERATOR']).default('E1'),
       size: z.number().int().min(1).max(200).optional(),
     }),
@@ -32,10 +35,15 @@ evaluationRouter.post(
     const { id } = req.params as { id: string };
     const body = req.body as {
       centreCode: string;
-      examinerName: string;
+      examinerName?: string;
+      examinerId?: string;
       examinerRole: 'E1' | 'E2' | 'MODERATOR';
       size?: number;
     };
+    const examiner = body.examinerId ? await prisma.examiner.findUnique({ where: { id: body.examinerId } }) : null;
+    if (body.examinerId && (!examiner || !examiner.active)) throw ApiError.badRequest('That examiner is not on the active panel');
+    const examinerName = examiner?.name ?? body.examinerName;
+    if (!examinerName) throw ApiError.badRequest('Choose an examiner');
 
     const paper = await prisma.examPaper.findUnique({
       where: { id },
@@ -57,13 +65,10 @@ evaluationRouter.post(
       throw ApiError.badRequest(`No candidates are seated at ${centre.code} for this session`);
     }
 
-    // Only candidates who actually take this paper.
-    const enrolled = await prisma.enrolment.findMany({
-      where: { subjectId: paper.subjectId, studentId: { in: seated.map((s) => s.studentId) } },
-      select: { studentId: true },
-    });
-    const takers = new Set(enrolled.map((e) => e.studentId));
-    const candidates = seated.filter((s) => takers.has(s.studentId));
+    // Only candidates who actually take this paper — regular or backlog — and were not absent.
+    const takers = new Set((await paperCandidates(paper)).map((c) => c.studentId));
+    const absentees = new Set((await prisma.answerScript.findMany({ where: { paperId: paper.id, absent: true }, select: { studentId: true } })).map((a) => a.studentId));
+    const candidates = seated.filter((s) => takers.has(s.studentId) && !absentees.has(s.studentId));
 
     if (candidates.length === 0) {
       throw ApiError.badRequest(`No candidate at ${centre.code} takes ${paper.subject.code}`);
@@ -82,7 +87,8 @@ evaluationRouter.post(
           paperId: paper.id,
           centreId: centre.id,
           status: 'UNDER_EVALUATION',
-          examinerName: body.examinerName,
+          examinerName,
+          examinerId: examiner?.id ?? null,
           examinerRole: body.examinerRole,
           assignedAt: new Date(),
         },

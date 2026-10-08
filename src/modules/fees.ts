@@ -1,5 +1,5 @@
 import { Router, type Request } from 'express';
-import { institutionCode } from './institution.js';
+import { allocate, nextNumber, statement, withSeries } from './finance/ledger.js';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import { prisma } from '../db.js';
@@ -25,11 +25,13 @@ feesRouter.get(
   asyncHandler(async (req, res) => {
     const id = await resolveStudentId(req);
 
-    const [items, payments, instalments, scholarships] = await Promise.all([
+    const [items, payments, instalments, scholarships, concessions, refunds] = await Promise.all([
       prisma.feeItem.findMany({ where: { studentId: id }, orderBy: { head: 'asc' } }),
-      prisma.payment.findMany({ where: { studentId: id }, orderBy: { paidAt: 'desc' } }),
+      prisma.payment.findMany({ where: { studentId: id }, include: { allocations: { include: { feeItem: { select: { head: true } } } } }, orderBy: { paidAt: 'desc' } }),
       prisma.instalment.findMany({ where: { studentId: id }, orderBy: { number: 'asc' } }),
       prisma.scholarshipAward.findMany({ where: { studentId: id } }),
+      prisma.feeConcession.findMany({ where: { studentId: id }, include: { feeItem: { select: { head: true } } }, orderBy: { createdAt: 'desc' } }),
+      prisma.feeRefund.findMany({ where: { studentId: id }, include: { feeItem: { select: { head: true } } }, orderBy: { createdAt: 'desc' } }),
     ]);
 
     const total = items.reduce((a, f) => a + f.amount, 0);
@@ -63,9 +65,24 @@ feesRouter.get(
         txnId: p.txnId,
         receipt: p.receiptNo,
         status: p.status,
+        kind: p.kind,
+        cancelReason: p.cancelReason,
+        appliedTo: p.allocations.map((a) => ({ head: a.feeItem.head, amount: a.amount })),
       })),
       scholarships,
+      concessions: concessions.map((c) => ({ id: c.id, no: c.concessionNo, head: c.feeItem.head, kind: c.kind, amount: c.amount, status: c.status, note: c.decisionNote, at: c.createdAt })),
+      refunds: refunds.map((r) => ({ id: r.id, no: r.refundNo, head: r.feeItem.head, amount: r.amount, status: r.status, note: r.decisionNote, paidAt: r.paidAt, payoutMode: r.payoutMode, payoutRef: r.payoutRef, at: r.createdAt })),
     });
+  }),
+);
+
+// ─── GET /api/student/fees/statement ──────────────────────────────────────────
+
+/** The full ledger with a running balance, and every receipt with the heads it paid — for the statement and receipt PDFs. */
+feesRouter.get(
+  '/statement',
+  asyncHandler(async (req, res) => {
+    res.json(await statement(await resolveStudentId(req)));
   }),
 );
 
@@ -83,9 +100,8 @@ async function settleInstalment(studentId: string, instalmentId: string, mode: s
   const existing = await prisma.payment.findUnique({ where: { txnId } });
   if (existing) return { payment: existing, already: true };
 
-  const receiptNo = `RCT/${await institutionCode()}/${new Date().getFullYear()}/${crypto.randomInt(100000, 999999)}`;
-
-  const payment = await prisma.$transaction(async (tx) => {
+  const payment = await withSeries(() => prisma.$transaction(async (tx) => {
+    const receiptNo = await nextNumber('RCT', tx);
     const instalment = await tx.instalment.findFirst({ where: { id: instalmentId, studentId } });
     if (!instalment) throw ApiError.notFound('Instalment not found for this student');
 
@@ -109,23 +125,11 @@ async function settleInstalment(studentId: string, instalmentId: string, mode: s
       },
     });
 
-    // Oldest unpaid head first, until the instalment is exhausted.
-    let remaining = instalment.amount;
-    const outstanding = await tx.feeItem.findMany({
-      where: { studentId, term: instalment.term },
-      orderBy: { head: 'asc' },
-    });
-    for (const item of outstanding) {
-      if (remaining <= 0) break;
-      const gap = item.amount - item.paid;
-      if (gap <= 0) continue;
-      const apply = Math.min(gap, remaining);
-      await tx.feeItem.update({ where: { id: item.id }, data: { paid: item.paid + apply } });
-      remaining -= apply;
-    }
+    // Oldest due head of the term first, until the instalment is exhausted; each share recorded.
+    await allocate(tx, created.id, studentId, instalment.amount, { term: instalment.term });
 
     return created;
-  });
+  }));
 
   return { payment, already: false };
 }
@@ -140,25 +144,33 @@ async function settleFeeItem(studentId: string, feeItemId: string, mode: string,
   const existing = await prisma.payment.findUnique({ where: { txnId } });
   if (existing) return { payment: existing, already: true };
 
-  const receiptNo = `RCT/${await institutionCode()}/${new Date().getFullYear()}/${crypto.randomInt(100000, 999999)}`;
-
-  const payment = await prisma.$transaction(async (tx) => {
+  const payment = await withSeries(() => prisma.$transaction(async (tx) => {
+    const receiptNo = await nextNumber('RCT', tx);
     const item = await tx.feeItem.findFirst({ where: { id: feeItemId, studentId } });
     if (!item) throw ApiError.notFound('Fee head not found for this student');
     const owing = item.amount - item.paid;
     if (owing <= 0) throw ApiError.conflict('Nothing is outstanding on that fee head');
     if (expectAmount !== undefined && expectAmount !== owing) throw ApiError.badRequest('The amount paid does not match what is outstanding');
 
-    // Claim the balance atomically, so two settlements cannot both apply it.
-    const claimed = await tx.feeItem.updateMany({ where: { id: item.id, paid: item.paid }, data: { paid: item.amount } });
-    if (claimed.count === 0) throw ApiError.conflict('That fee head was just paid');
-
-    return tx.payment.create({
+    const created = await tx.payment.create({
       data: { studentId, head: item.head, amount: owing, mode, txnId, receiptNo, status: 'SUCCESS' },
     });
-  });
+    // Claimed atomically inside allocate, so two settlements cannot both apply it.
+    try { await allocate(tx, created.id, studentId, owing, { feeItemId: item.id }); } catch { throw ApiError.conflict('That fee head was just paid'); }
+    return created;
+  }));
 
   return { payment, already: false };
+}
+
+/**
+ * Settles a fee head named by its prefix — the examination office taking a
+ * revaluation fee over its own counter, say. Nothing happens if it is paid.
+ */
+export async function settleFeeHead(studentId: string, headPrefix: string, mode: string) {
+  const item = await prisma.feeItem.findFirst({ where: { studentId, head: { startsWith: headPrefix } } });
+  if (!item || item.amount - item.paid <= 0) return null;
+  return settleFeeItem(studentId, item.id, mode, `${mode}-${Date.now()}${crypto.randomInt(1000, 9999)}`);
 }
 
 const present = (p: { id: string; txnId: string; receiptNo: string | null; amount: number; status: string; paidAt: Date }) => ({

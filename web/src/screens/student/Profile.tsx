@@ -4,6 +4,7 @@ import { useResults, useStudentRecord } from '../../lib/queries';
 import { useCollection, useFiles } from '../../lib/records';
 import { FIELD_KEY, NEEDS_PROOF, correctionNo, type CorrectionField, type RecordCorrection } from '../../lib/corrections';
 import IdentityVerification from '../../components/IdentityVerification';
+import MyStanding from '../../components/MyStanding';
 import { useMyVerification } from '../../lib/verification';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -141,6 +142,12 @@ export default function ProfileModule({ onNavigate: _ }: Props) {
             Request Edit
           </Button>
         </div>
+      </div>
+
+      {/* Standing on the rolls */}
+      <div className="mt-2">
+        <SectionLabel label="Academic standing & applications" />
+        <MyStanding />
       </div>
 
       {/* Edit Request Trail */}

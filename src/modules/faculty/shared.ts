@@ -2,6 +2,7 @@ import type { Request } from 'express';
 import { currentTenant, prisma } from '../../db.js';
 import { ApiError } from '../../lib/http.js';
 import { ATTENDANCE_THRESHOLD } from '../student.js';
+import { attendanceBySubject, attendanceOverall } from '../attendance/policy.js';
 
 /**
  * How long a roll call stays editable. After this the sheet is frozen and only
@@ -19,12 +20,29 @@ export const PRESENT_STATUSES = ['PRESENT', 'LATE', 'EXCUSED'] as const;
  * no code change at the start of a semester. Cached briefly per institute.
  */
 const termCache = new Map<string, { term: string; at: number }>();
+
+/**
+ * Orders terms in time. As text, 2024-25-ODD sorts after 2024-25-EVEN, which
+ * would keep the odd term current for the whole year; the EVEN half of an
+ * academic year comes after its ODD half.
+ */
+export function termRank(term: string): number {
+  const m = /^(\d{4})-\d{2}-(ODD|EVEN)$/.exec(term);
+  return m ? Number(m[1]) * 2 + (m[2] === 'EVEN' ? 1 : 0) : -1;
+}
+
+/** The latest of some terms, or null for none. */
+export function latestTerm(terms: string[]): string | null {
+  return terms.reduce<string | null>((best, t) => (best === null || termRank(t) > termRank(best) || (termRank(t) === termRank(best) && t > best) ? t : best), null);
+}
+
 export async function currentTerm(): Promise<string> {
   const key = currentTenant()?.slug ?? 'default';
   const hit = termCache.get(key);
   if (hit && Date.now() - hit.at < 5 * 60_000) return hit.term;
-  const latest = await prisma.enrolment.findFirst({ orderBy: { term: 'desc' }, select: { term: true } });
-  const term = latest?.term ?? `${new Date().getFullYear()}-${String((new Date().getFullYear() + 1) % 100).padStart(2, '0')}-ODD`;
+  const terms = await prisma.enrolment.findMany({ distinct: ['term'], select: { term: true } });
+  const latest = latestTerm(terms.map((t) => t.term));
+  const term = latest ?? `${new Date().getFullYear()}-${String((new Date().getFullYear() + 1) % 100).padStart(2, '0')}-ODD`;
   termCache.set(key, { term, at: Date.now() });
   return term;
 }
@@ -81,102 +99,25 @@ export async function ownedSession(sessionId: string, facultyId: string) {
     where: { facultyId, subjectId: session.subjectId },
     select: { id: true },
   });
+  // A colleague arranged as the substitute for this very class may take its roll call.
+  const covering = teaches ? null : await prisma.timetableChange.findFirst({
+    where: { kind: 'SUBSTITUTE', facultyId, subjectId: session.subjectId, date: session.date.toISOString().slice(0, 10), startTime: session.startTime },
+    select: { id: true },
+  });
 
-  if (!teaches) throw ApiError.forbidden('You do not teach this subject');
+  if (!teaches && !covering) throw ApiError.forbidden('You do not teach this subject');
 
   return session;
 }
 
-/**
- * Running attendance for a set of students across a set of subjects.
- *
- * Deliberately the same rule the student portal uses — every session held for
- * the subject is the denominator — so a lecturer and a student never see two
- * different percentages for the same class.
- */
+/** Held and attended per student and subject, keyed "studentId:subjectId" — see attendance/policy.ts. */
 export async function attendanceFor(studentIds: string[], subjectIds: string[]) {
-  if (studentIds.length === 0 || subjectIds.length === 0) {
-    return new Map<string, { present: number; total: number; percent: number }>();
-  }
-
-  const [sessions, records] = await Promise.all([
-    prisma.classSession.findMany({
-      where: { subjectId: { in: subjectIds } },
-      select: { id: true, subjectId: true },
-    }),
-    prisma.attendanceRecord.findMany({
-      where: { studentId: { in: studentIds }, status: { in: [...PRESENT_STATUSES] } },
-      select: { studentId: true, sessionId: true },
-    }),
-  ]);
-
-  const subjectOfSession = new Map(sessions.map((s) => [s.id, s.subjectId]));
-  const heldBySubject = new Map<string, number>();
-  for (const s of sessions) {
-    heldBySubject.set(s.subjectId, (heldBySubject.get(s.subjectId) ?? 0) + 1);
-  }
-
-  const presentByKey = new Map<string, number>();
-  for (const r of records) {
-    const subjectId = subjectOfSession.get(r.sessionId);
-    if (!subjectId) continue;
-    const key = `${r.studentId}:${subjectId}`;
-    presentByKey.set(key, (presentByKey.get(key) ?? 0) + 1);
-  }
-
-  // Keyed "studentId:subjectId" so one pass serves a whole roster.
-  const out = new Map<string, { present: number; total: number; percent: number }>();
-  for (const studentId of studentIds) {
-    for (const subjectId of subjectIds) {
-      const total = heldBySubject.get(subjectId) ?? 0;
-      const present = presentByKey.get(`${studentId}:${subjectId}`) ?? 0;
-      out.set(`${studentId}:${subjectId}`, {
-        present,
-        total,
-        percent: total === 0 ? 0 : Number(((present / total) * 100).toFixed(1)),
-      });
-    }
-  }
-
-  return out;
+  return attendanceBySubject(studentIds, subjectIds);
 }
 
-/** Aggregate percentage across every subject a student is enrolled in. */
+/** Aggregate percentage across every subject a student has been marked in. */
 export async function overallAttendance(studentIds: string[]) {
-  const out = new Map<string, { present: number; total: number; percent: number }>();
-  if (studentIds.length === 0) return out;
-
-  const enrolments = await prisma.enrolment.findMany({
-    where: { studentId: { in: studentIds } },
-    select: { studentId: true, subjectId: true },
-  });
-
-  const subjectIds = [...new Set(enrolments.map((e) => e.subjectId))];
-  const perSubject = await attendanceFor(studentIds, subjectIds);
-
-  // Group once rather than re-scanning the enrolment list per student.
-  const subjectsOf = new Map<string, string[]>();
-  for (const e of enrolments) {
-    subjectsOf.set(e.studentId, [...(subjectsOf.get(e.studentId) ?? []), e.subjectId]);
-  }
-
-  for (const studentId of studentIds) {
-    let present = 0;
-    let total = 0;
-    for (const subjectId of subjectsOf.get(studentId) ?? []) {
-      const cell = perSubject.get(`${studentId}:${subjectId}`);
-      if (!cell) continue;
-      present += cell.present;
-      total += cell.total;
-    }
-    out.set(studentId, {
-      present,
-      total,
-      percent: total === 0 ? 0 : Number(((present / total) * 100).toFixed(1)),
-    });
-  }
-
-  return out;
+  return attendanceOverall(studentIds);
 }
 
 /** The term a request asks about, defaulting to the live academic session. */

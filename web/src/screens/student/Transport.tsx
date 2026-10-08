@@ -1,268 +1,176 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import type { Module } from '../StudentPortal';
-import { Button, Modal, StatusPill, InlineAlert, SkeletonRow, toast } from '../../components/ui';
-import { useQueryClient } from '@tanstack/react-query';
-import { useTransportRecord } from '../../lib/queries';
-import { useCollection } from '../../lib/records';
-
-/** A request to the transport desk to renew (or start) a bus pass. */
-interface PassRequest { id: string; routeNo: string; requestedAt: string; note?: string; status: 'pending' | 'done' | 'declined' }
+import { Button, EmptyState, InlineAlert, Input, Modal, Select, Spinner, toast } from '../../components/ui';
+import { ApiError } from '../../lib/api';
+import { downloadPdf } from '../../lib/export';
+import { PASS_LABEL, PASS_STYLE, day, delayText, post, rupees, time, useMyTransport, useTransportAction, type MyTransport } from '../../lib/transport';
 
 interface Props { onNavigate: (m: Module) => void }
 
+const errText = (e: unknown) => (e instanceof ApiError ? e.message : 'Could not reach the server.');
 
-function SectionHeader({ label }: { label: string }) {
+function Section({ label, action, children }: { label: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="bg-[#EDEFF3] px-4 py-2 flex items-center justify-between">
-      <span className="text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">{label}</span>
+    <div className="mt-3">
+      <div className="bg-[#EDEFF3] px-4 py-2 flex items-center justify-between"><span className="text-[11px] font-semibold text-[#5A6577] uppercase tracking-wider">{label}</span>{action}</div>
+      <div className="bg-white border-t border-b border-[#D3D8E0]">{children}</div>
     </div>
   );
 }
 
+/**
+ * The student's bus: the pass and its fee, the route and crew, today's run
+ * stop by stop with the times the bus actually left and the arrival it is
+ * now expected at, whether they boarded, and asking for a pass or a move.
+ */
 export default function Transport({ onNavigate }: Props) {
-  const { data: TRANSPORT, isPending, error } = useTransportRecord();
+  const q = useMyTransport();
+  const [asking, setAsking] = useState(false);
+  const cancel = useTransportAction((id: string) => post(`/me/requests/${id}/cancel`));
+  if (q.isLoading) return <div className="flex justify-center py-16"><Spinner size={22} /></div>;
+  if (q.isError || !q.data) return <div className="p-4"><InlineAlert type="error">{errText(q.error)}</InlineAlert></div>;
+  const d = q.data;
+  const p = d.pass;
+  const open = d.requests.find((r) => r.status === 'PENDING');
+  const usable = p && p.state === 'ACTIVE';
 
-  const [renewOpen, setRenewOpen] = useState(false);
-  const qc = useQueryClient();
-  const requests = useCollection<PassRequest>('student:transport-requests', []);
-  const pendingRequest = requests.items.find(r => r.status === 'pending');
-  const [refreshed, setRefreshed] = useState(false);
-  // Empty until the route arrives, then seeded from the server timestamp.
-  const [lastUpdate, setLastUpdate] = useState('');
-
-  useEffect(() => {
-    if (TRANSPORT && !lastUpdate) setLastUpdate(TRANSPORT.lastUpdated);
-  }, [TRANSPORT, lastUpdate]);
-
-  // Every hook is declared above this point, so the early returns are safe.
-  if (isPending) {
-    return (
-      <div className="bg-[#EDEFF3] min-h-screen p-4">
-        <div className="bg-white border border-[#D3D8E0] rounded-[4px] p-4">
-          <SkeletonRow />
-          <SkeletonRow />
-          <SkeletonRow />
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="bg-[#EDEFF3] min-h-screen p-4">
-        <InlineAlert type="error">Could not load transport: {(error as Error).message}</InlineAlert>
-      </div>
-    );
-  }
-
-  if (!TRANSPORT) {
-    return (
-      <div className="bg-[#EDEFF3] min-h-screen p-4">
-        <InlineAlert type="info">
-          No bus pass is on file for you. Apply at the college office to track a route here.
-        </InlineAlert>
-      </div>
-    );
-  }
-
-  // Check if pass is expiring within 15 days
-  const passDueParts = TRANSPORT.passDue.split('-');
-  const passDueDate = new Date(`${passDueParts[2]}-${passDueParts[1]}-${passDueParts[0]}`);
-  const today = new Date();
-  const daysLeft = Math.ceil((passDueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-  const expired = daysLeft < 0;
-  const expiringSoon = daysLeft <= 15;
-
-  async function handleRefresh() {
-    setRefreshed(true);
-    await qc.invalidateQueries({ queryKey: ['transport'] });
-    setLastUpdate(`Today ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`);
-    setRefreshed(false);
-  }
-
-  function handleRenew() {
-    if (pendingRequest) { setRenewOpen(false); return; }
-    requests.add({ id: `TR-${Date.now().toString(36).toUpperCase()}`, routeNo: TRANSPORT!.routeNo, requestedAt: new Date().toISOString(), status: 'pending' });
-    setRenewOpen(false);
-    toast.success('Renewal requested — pay the transport fee when it appears on your fee account; the desk then renews your pass');
+  async function passPdf() {
+    if (!p) return;
+    await downloadPdf({
+      title: 'Bus pass', subtitle: `${p.route.routeNo} · ${p.route.name}`, reference: p.passNo, fileName: `bus-pass-${p.passNo.replace(/\//g, '-')}`, qr: p.passNo,
+      sections: [{ fields: [['Student', d.student.name], ['Route', `${p.route.routeNo} · ${p.route.name}`], ['Boards at', p.stop ? `${p.stop.name} (${p.stop.time})` : '—'], ['Term', p.term ?? '—'], ['Valid till', day(p.validTill)], ['Bus', p.route.vehicle?.regNo ?? '—']] }, { text: ['Show this pass to the bus attendant. It is checked against the transport office records each time.'] }],
+    });
   }
 
   return (
-    <div className="min-h-screen bg-[#EDEFF3]">
-      {/* Header */}
-      <div className="bg-[#16264A] px-4 py-4">
-        <button onClick={() => onNavigate(null as any)} className="flex items-center gap-2 text-white/60 hover:text-white mb-3 cursor-pointer">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
-          <span className="text-[13px]">Student Portal</span>
-        </button>
-        <h1 className="text-[20px] font-semibold text-white">Transport</h1>
-        <p className="text-[13px] text-white/60 mt-0.5">Campus Bus Service</p>
+    <div className="bg-[#EDEFF3] min-h-screen pb-10">
+      <div className="bg-[#16264A] px-4 py-4 text-white">
+        <h1 className="text-[20px] font-semibold">Transport</h1>
+        {p ? <p className="text-[13px] text-white/70 mt-0.5">{p.route.routeNo} · {p.route.name}</p> : <p className="text-[13px] text-white/60 mt-0.5">You do not have a bus pass.</p>}
       </div>
 
-      {/* Pass Status Band */}
-      <div className="bg-[#16264A] border-t border-white/10 px-4 py-4 flex flex-col gap-3">
-        <div className="flex items-start justify-between">
-          <div>
-            <p className="text-[11px] text-white/50 uppercase tracking-wider mb-1">Route</p>
-            <p className="text-[16px] font-semibold text-white">{TRANSPORT.routeNo} · {TRANSPORT.name}</p>
+      {p && (
+        <Section label="Your pass">
+          <div className="px-4 py-3 space-y-2">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="font-mono text-[14px] text-[#16264A] font-semibold">{p.passNo}</p>
+                <p className="text-[12px] text-[#5A6577]">Boards at {p.stop?.name ?? '—'}{p.stop ? ` · ${p.stop.time}` : ''} · {p.term ?? ''} · valid till {day(p.validTill)}</p>
+              </div>
+              <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${PASS_STYLE[p.state]}`}>{PASS_LABEL[p.state]}</span>
+            </div>
+            {p.state === 'PENDING_PAYMENT' && <InlineAlert type="warning">Pay {rupees(p.feeDue)}{p.feeDueDate ? ` by ${day(p.feeDueDate)}` : ''} to activate your pass. It activates as soon as the payment is received. <button className="underline cursor-pointer" onClick={() => onNavigate('fee')}>Go to Fees</button></InlineAlert>}
+            {p.state === 'EXPIRED' && <InlineAlert type="info">Your pass has expired. Apply below for this term.</InlineAlert>}
+            {p.state === 'CANCELLED' && <InlineAlert type="info">Cancelled{p.cancelledReason ? `: ${p.cancelledReason}` : ''}.</InlineAlert>}
+            {usable && <Button size="sm" variant="secondary" onClick={() => void passPdf()}>Download pass</Button>}
           </div>
-          <StatusPill status={TRANSPORT.passValid ? 'valid' : 'overdue'} />
-        </div>
-        <div className="flex gap-6">
-          <div>
-            <p className="text-[11px] text-white/50 uppercase tracking-wider mb-0.5">Bus No.</p>
-            <p className="text-[14px] font-mono text-white">{TRANSPORT.busNo}</p>
+        </Section>
+      )}
+
+      {usable && <LiveSection d={d} />}
+
+      {p && (
+        <Section label="Bus and crew">
+          <div className="px-4 py-3 text-[13px] space-y-1">
+            <p>Bus <span className="font-mono">{p.route.vehicle?.regNo ?? 'not assigned'}</span>{p.route.vehicle?.make ? ` · ${p.route.vehicle.make}` : ''}</p>
+            {p.route.driver && <p>Driver {p.route.driver.name} · <a className="text-[#E0952A]" href={`tel:${p.route.driver.phone.replace(/\s/g, '')}`}>{p.route.driver.phone}</a></p>}
+            {p.route.attendant && <p>Attendant {p.route.attendant.name} · <a className="text-[#E0952A]" href={`tel:${p.route.attendant.phone.replace(/\s/g, '')}`}>{p.route.attendant.phone}</a></p>}
           </div>
-          <div>
-            <p className="text-[11px] text-white/50 uppercase tracking-wider mb-0.5">Pass Valid Till</p>
-            <p className="text-[14px] font-medium text-white">{TRANSPORT.passDue}</p>
+        </Section>
+      )}
+
+      {d.boardings.length > 0 && (
+        <Section label="Recent boardings">
+          {d.boardings.map((b) => <p key={b.at} className="px-4 py-2 text-[12px] border-b border-[#EDEFF3] last:border-0">{day(b.at)} · {b.shift.toLowerCase()} · boarded {time(b.at)}</p>)}
+        </Section>
+      )}
+
+      <Section label={p && usable ? 'Change route or stop' : 'Apply for a bus pass'} action={!open && d.student.onRolls ? <button onClick={() => setAsking(true)} className="text-[12px] text-[#E0952A] font-medium cursor-pointer">{p && usable ? 'Ask to move' : 'Apply'}</button> : undefined}>
+        {open ? (
+          <div className="px-4 py-3">
+            <p className="text-[13px] text-[#16264A]"><span className="font-mono">{open.requestNo}</span> · with the transport desk</p>
+            <p className="text-[12px] text-[#5A6577]">{open.route.routeNo} / {open.stop.name} · {rupees(open.stop.fare)}</p>
+            <Button size="sm" variant="ghost" loading={cancel.isPending} onClick={() => cancel.mutate(open.id, { onSuccess: () => toast.success('Request withdrawn'), onError: (e) => toast.error(errText(e)) })}>Withdraw</Button>
           </div>
-        </div>
-        {expiringSoon && (
-          <div className="bg-[#E0952A]/20 border border-[#E0952A]/40 rounded-[4px] px-3 py-2">
-            <p className="text-[12px] text-[#E0952A] font-medium">
-              {expired
-                ? `Pass expired ${Math.abs(daysLeft)} days ago — renew to travel`
-                : daysLeft === 0
-                  ? 'Pass expires today — renew to avoid disruption'
-                  : `Pass expiring in ${daysLeft} day${daysLeft === 1 ? '' : 's'} — renew to avoid disruption`}
-            </p>
+        ) : !d.student.onRolls ? <p className="px-4 py-3 text-[13px] text-[#5A6577]">Only students on the rolls can apply.</p>
+          : d.routes.length === 0 ? <p className="px-4 py-3 text-[13px] text-[#5A6577]">No route is taking riders at the moment.</p>
+          : d.routes.map((r) => (
+            <div key={r.id} className="px-4 py-2.5 border-b border-[#EDEFF3] last:border-0">
+              <p className="text-[13px] font-semibold text-[#16264A]">{r.routeNo} · {r.name} <span className={`font-normal text-[12px] ${r.seatsLeft ? 'text-[#0E7A5F]' : 'text-[#A8242C]'}`}>· {r.seatsLeft} seats left</span></p>
+              <p className="text-[11px] text-[#5A6577]">{r.stops.filter((s) => s.fare > 0).map((s) => `${s.name} ${s.time} (${rupees(s.fare)})`).join(' · ')}</p>
+            </div>
+          ))}
+        {d.requests.filter((r) => r.status !== 'PENDING').length > 0 && (
+          <div className="px-4 py-2 border-t border-[#EDEFF3]">
+            {d.requests.filter((r) => r.status !== 'PENDING').map((r) => <p key={r.id} className="text-[12px] text-[#5A6577] py-0.5"><span className="font-mono">{r.requestNo}</span> · {r.route.routeNo} / {r.stop.name} · {r.status.toLowerCase()}{r.decisionNote ? ` — ${r.decisionNote}` : ''}</p>)}
           </div>
         )}
-        {expiringSoon && (
-          <Button variant="primary" size="md" onClick={() => setRenewOpen(true)}>
-            Renew Pass
-          </Button>
-        )}
+      </Section>
+
+      {asking && <ApplyModal d={d} onClose={() => setAsking(false)} />}
+    </div>
+  );
+}
+
+function LiveSection({ d }: { d: MyTransport }) {
+  const live = d.live;
+  const p = d.pass!;
+  if (!live) {
+    return (
+      <Section label="Today">
+        <div className="px-4 py-3"><EmptyState title="The bus has not started today's run" description={p.stop ? `Your pickup at ${p.stop.name} is scheduled for ${p.stop.time}. This page updates once the run begins.` : undefined} /></div>
+      </Section>
+    );
+  }
+  const mine = live.stops.find((s) => s.stopId === p.stop?.id);
+  return (
+    <Section label={`Today's ${live.shift.toLowerCase()} run — ${live.status.toLowerCase()}`}>
+      <div className="px-4 pt-3 text-[12px] text-[#5A6577]">
+        Updated {time(live.lastUpdated)}{live.delayMinutes !== null ? ` · ${delayText(live.delayMinutes)}` : ''}{live.boardedAt ? ` · you boarded at ${time(live.boardedAt)}` : ''}{live.note ? ` · ${live.note}` : ''}
+        {mine && !mine.departedAt && mine.eta && <p className="text-[14px] text-[#16264A] font-semibold mt-1">Expected at {mine.name} around {mine.eta}</p>}
       </div>
-
-      {/* Route & Stops */}
-      <SectionHeader label={`Route stops — ${TRANSPORT.routeNo}`} />
-      <div className="bg-white border-b border-[#D3D8E0]">
-        {TRANSPORT.stops.map((stop, i) => {
-          const isPast = i < TRANSPORT.currentStop;
-          const isCurrent = i === TRANSPORT.currentStop;
-          const isNext = i === TRANSPORT.currentStop + 1;
-          const isLast = i === TRANSPORT.stops.length - 1;
-
+      <div className="px-4 py-3">
+        {live.stops.map((s, i) => {
+          const passed = !!s.departedAt || s.skipped;
+          const next = !passed && i === live.lastStop + 1 && live.status === 'RUNNING';
           return (
-            <div key={stop.name} className={`flex items-center px-4 py-3 gap-3 relative ${!isLast ? 'border-b border-[#D3D8E0]' : ''} ${isCurrent ? 'bg-[#FEF9EC]' : isNext ? 'bg-[#F0FDF4]' : ''}`}>
-              {/* Stop indicator column */}
-              <div className="flex flex-col items-center w-6 shrink-0 self-stretch">
-                <div className={`w-3 h-3 rounded-full border-2 shrink-0 mt-2 ${
-                  isPast ? 'border-[#0E7A5F] bg-[#0E7A5F]' :
-                  isCurrent ? 'border-[#E0952A] bg-[#E0952A]' :
-                  isNext ? 'border-[#0E7A5F] bg-white' :
-                  'border-[#D3D8E0] bg-white'
-                }`} />
-                {!isLast && (
-                  <div className={`w-px flex-1 mt-1 ${isPast ? 'bg-[#0E7A5F]' : 'bg-[#D3D8E0]'}`} />
-                )}
+            <div key={s.stopId} className="flex gap-3">
+              <div className="flex flex-col items-center">
+                <div className={`w-3 h-3 rounded-full mt-1 ${s.departedAt ? 'bg-[#0E7A5F]' : next ? 'bg-[#E0952A]' : 'border-2 border-[#D3D8E0] bg-white'}`} />
+                {i < live.stops.length - 1 && <div className={`w-px flex-1 ${s.departedAt ? 'bg-[#0E7A5F]' : 'bg-[#D3D8E0]'}`} />}
               </div>
-
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <p className={`text-[15px] font-medium ${isCurrent ? 'text-[#E0952A]' : isNext ? 'text-[#0E7A5F]' : isPast ? 'text-[#5A6577]' : 'text-[#16264A]'}`}>
-                    {stop.name}
-                  </p>
-                  {isCurrent && (
-                    <span className="text-[10px] font-semibold px-1.5 py-0.5 bg-[#E0952A] text-white rounded-[2px]">DEPARTED</span>
-                  )}
-                  {isNext && (
-                    <span className="text-[10px] font-semibold px-1.5 py-0.5 bg-[#0E7A5F] text-white rounded-[2px]">NEXT</span>
-                  )}
-                </div>
-                {isCurrent && (
-                  <p className="text-[11px] text-[#E0952A]">Departed 08:14 AM</p>
-                )}
-                {isNext && (
-                  <p className="text-[11px] text-[#0E7A5F]">Expected 08:21 AM</p>
-                )}
+              <div className="pb-3 flex-1">
+                <p className={`text-[14px] ${s.stopId === p.stop?.id ? 'font-bold' : 'font-medium'} ${passed ? 'text-[#5A6577]' : 'text-[#16264A]'}`}>{s.name}{s.stopId === p.stop?.id ? ' (your stop)' : ''}</p>
+                <p className="text-[12px] text-[#5A6577]">
+                  {s.scheduled ? `due ${s.scheduled}` : ''}
+                  {s.departedAt ? ` · left ${time(s.departedAt)}${s.delayMinutes !== null ? ` (${delayText(s.delayMinutes)})` : ''}` : s.skipped ? ' · passed' : s.eta ? ` · expected ${s.eta}` : ''}
+                </p>
               </div>
-              <span className="text-[13px] font-mono text-[#5A6577] shrink-0">{stop.time}</span>
             </div>
           );
         })}
       </div>
+      <p className="px-4 pb-3 text-[11px] text-[#5A6577]">Times are recorded by the bus attendant as the bus leaves each stop; expected times assume the bus keeps its present delay.</p>
+    </Section>
+  );
+}
 
-      {/* Live Bus Location */}
-      <SectionHeader label="Live Bus Location" />
-      <div className="bg-white border-b border-[#D3D8E0]">
-        <div className="mx-4 my-4 rounded-[4px] overflow-hidden bg-[#1E3A5F] relative" style={{ height: 180 }}>
-          {/* Route line */}
-          <svg className="absolute inset-0 w-full h-full" viewBox="0 0 360 180" preserveAspectRatio="none">
-            <line x1="20" y1="90" x2="340" y2="90" stroke="#FFFFFF22" strokeWidth="3" />
-            <line x1="20" y1="90" x2="180" y2="90" stroke="#E0952A" strokeWidth="3" />
-            {/* Stop dots */}
-            {[20, 90, 160, 250, 340].map((x, i) => (
-              <circle key={i} cx={x} cy="90" r="6"
-                fill={i < TRANSPORT.currentStop ? '#0E7A5F' : i === TRANSPORT.currentStop ? '#E0952A' : '#FFFFFF33'}
-                stroke="white" strokeWidth="1.5"
-              />
-            ))}
-            {/* Animated bus dot */}
-            <circle cy="90" r="8" fill="#E0952A" stroke="white" strokeWidth="2">
-              <animate attributeName="cx" values="90;160" dur="4s" repeatCount="indefinite" />
-            </circle>
-          </svg>
-          {/* Stop labels */}
-          <div className="absolute bottom-3 left-0 right-0 flex justify-between px-3">
-            {TRANSPORT.stops.map(s => (
-              <span key={s.name} className="text-[8px] text-white/60 text-center w-12 leading-tight">{s.name.split(' ')[0]}</span>
-            ))}
-          </div>
-          <div className="absolute top-3 left-3 right-3 flex justify-between">
-            <span className="text-[11px] font-semibold text-white">{TRANSPORT.routeNo} live</span>
-            <span className="text-[10px] text-white/50">Approximate tracking</span>
-          </div>
-        </div>
-        <div className="px-4 pb-4 flex items-center justify-between">
-          <div>
-            <p className="text-[12px] text-[#5A6577]">Last updated</p>
-            <p className="text-[13px] font-mono text-[#16264A]">{lastUpdate}</p>
-            <p className="text-[11px] text-[#5A6577] mt-0.5">Data from MPTRANSCO · Tracking is approximate</p>
-          </div>
-          <Button variant="secondary" size="sm" loading={refreshed} onClick={() => void handleRefresh()}>
-            Refresh
-          </Button>
-        </div>
+function ApplyModal({ d, onClose }: { d: MyTransport; onClose: () => void }) {
+  const [routeId, setRouteId] = useState(d.pass?.route.id ?? '');
+  const [stopId, setStopId] = useState('');
+  const [note, setNote] = useState('');
+  const route = d.routes.find((r) => r.id === routeId);
+  const stop = route?.stops.find((s) => s.id === stopId);
+  const apply = useTransportAction(() => post<{ requestNo: string }>('/me/requests', { routeId, stopId, ...(note.trim() ? { note: note.trim() } : {}) }));
+  return (
+    <Modal open onClose={onClose} title={d.pass?.state === 'ACTIVE' ? 'Ask to change your route or stop' : 'Apply for a bus pass'}
+      footer={<><Button size="sm" variant="secondary" onClick={onClose}>Cancel</Button><Button size="sm" loading={apply.isPending} disabled={!routeId || !stopId} onClick={() => apply.mutate(undefined, { onSuccess: (r) => { toast.success(`Request ${r.requestNo} sent to the transport desk`); onClose(); }, onError: (e) => toast.error(errText(e)) })}>Send</Button></>}>
+      <div className="space-y-3">
+        <Select label="Route" value={routeId} onChange={(e) => { setRouteId(e.target.value); setStopId(''); }}><option value="">Choose…</option>{d.routes.map((r) => <option key={r.id} value={r.id} disabled={r.seatsLeft === 0 && r.id !== d.pass?.route.id}>{r.routeNo} · {r.name} ({r.seatsLeft} seats left)</option>)}</Select>
+        <Select label="Board at" value={stopId} disabled={!route} onChange={(e) => setStopId(e.target.value)}><option value="">Choose…</option>{route?.stops.filter((s) => s.fare > 0).map((s) => <option key={s.id} value={s.id}>{s.name} · {s.time} · {rupees(s.fare)} a term</option>)}</Select>
+        {stop && <p className="text-[12px] text-[#5A6577]">Fare for {d.term}: {rupees(stop.fare)}{d.pass?.state === 'ACTIVE' ? '. If you already paid for this term, only any difference is charged.' : '. Once approved it appears on your fee account; the pass works as soon as it is paid.'}</p>}
+        <Input label="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
       </div>
-
-      {/* Pass Renewal Section */}
-      <SectionHeader label="Pass Renewal" />
-      <div className="bg-white px-4 py-4 border-b border-[#D3D8E0]">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <p className="text-[14px] font-semibold text-[#16264A]">Pass valid till {TRANSPORT.passDue}</p>
-            <p className="text-[12px] text-[#5A6577]">Route {TRANSPORT.routeNo}</p>
-          </div>
-        </div>
-        {pendingRequest
-          ? <InlineAlert type="info">Renewal requested on {new Date(pendingRequest.requestedAt).toLocaleDateString('en-IN')}. The transport desk renews your pass once the fee is paid.</InlineAlert>
-          : <Button variant="primary" size="lg" className="w-full" onClick={() => setRenewOpen(true)}>Request renewal</Button>}
-      </div>
-
-      {/* Renewal Modal */}
-      <Modal open={renewOpen} onClose={() => setRenewOpen(false)} title="Renew Bus Pass"
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setRenewOpen(false)}>Cancel</Button>
-            <Button variant="primary" onClick={handleRenew}>Send request</Button>
-          </>
-        }
-      >
-        <div className="flex flex-col gap-4">
-          <div className="bg-[#EDEFF3] rounded-[4px] px-4 py-3 flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[13px] text-[#5A6577]">Route</span>
-              <span className="text-[14px] font-medium text-[#16264A]">{TRANSPORT.routeNo} · {TRANSPORT.name}</span>
-            </div>
-          </div>
-          <InlineAlert type="info">The transport desk adds the fee for the next period to your fee account. Pay it there (online or at the counter) and your pass is renewed.</InlineAlert>
-        </div>
-      </Modal>
-
-      <div className="h-8" />
-    </div>
+    </Modal>
   );
 }

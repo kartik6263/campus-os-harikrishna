@@ -15,11 +15,11 @@ interface Props { onNavigate: (s: Screen) => void }
 type Module = 'chat' | 'voice' | 'dropout' | 'performance' | 'learning';
 
 const NAV: Array<{ id: Module; label: string; sub: string; icon: string; tag?: string }> = [
-  { id: 'chat', label: 'AI Chat Assistant', sub: 'English & Hindi · answers from live records', icon: '💬', tag: 'LIVE' },
-  { id: 'voice', label: 'Voice Assistant', sub: 'Speak in Hindi or English, hear the answer', icon: '🎤', tag: 'LIVE' },
-  { id: 'dropout', label: 'Early Dropout Prediction', sub: 'Risk board for mentors & principals', icon: '📉', tag: 'AI' },
-  { id: 'performance', label: 'Predictive Performance', sub: 'Projected result band per student', icon: '📈', tag: 'AI' },
-  { id: 'learning', label: 'Personalised Learning', sub: 'Recommended material per weak topic', icon: '📚', tag: 'AI' },
+  { id: 'chat', label: 'AI Chat Assistant', sub: 'Gemini · English & Hindi · live records', icon: '💬', tag: 'LIVE' },
+  { id: 'voice', label: 'Voice Assistant', sub: 'Speak Hindi or English · any browser', icon: '🎤', tag: 'LIVE' },
+  { id: 'dropout', label: 'Early Dropout Prediction', sub: 'Risk board + AI counselling briefs', icon: '📉', tag: 'AI' },
+  { id: 'performance', label: 'Predictive Performance', sub: 'Projected band + AI performance coach', icon: '📈', tag: 'AI' },
+  { id: 'learning', label: 'Personalised Learning', sub: 'Weak topics + AI study plans', icon: '📚', tag: 'AI' },
 ];
 
 const TAG_COLORS: Record<string, string> = {

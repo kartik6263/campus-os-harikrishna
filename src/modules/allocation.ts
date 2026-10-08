@@ -215,7 +215,7 @@ allocationRouter.get(
       _count: { _all: true },
     });
     const count = new Map(enrolled.map((e) => [e.subjectId, e._count._all]));
-    const classSize = await prisma.student.groupBy({ by: ['semester'], where: { programmeId }, _count: { _all: true } });
+    const classSize = await prisma.student.groupBy({ by: ['semester'], where: { programmeId, status: 'ACTIVE' }, _count: { _all: true } });
     const sizeOf = new Map(classSize.map((c) => [c.semester, c._count._all]));
 
     res.json({
@@ -284,7 +284,7 @@ allocationRouter.post(
 
     const classLabel = `${subject.programme.shortName} ${ROMAN[subject.semester] ?? subject.semester} Sem ${body.section}`;
     // The class: every student of the programme in the subject's semester.
-    const students = await prisma.student.findMany({ where: { programmeId: subject.programmeId, semester: subject.semester }, select: { id: true } });
+    const students = await prisma.student.findMany({ where: { programmeId: subject.programmeId, semester: subject.semester, status: 'ACTIVE' }, select: { id: true } });
 
     const assignment = await prisma.$transaction(async (tx) => {
       const created = await tx.subjectAssignment.create({

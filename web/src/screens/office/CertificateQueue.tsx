@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { Button, Modal, InlineAlert, Checkbox, toast } from '../../components/ui';
+import { downloadCertificate } from '../../lib/certificates';
 import {
   useAdvanceCertificate,
   useCertificateQueue,
@@ -69,11 +70,19 @@ function ProcessModal({
   item,
   onClose,
   onMarkReady,
+  onFee,
+  onDecline,
+  busy,
 }: {
   item: CertQueueItem;
   onClose: () => void;
   onMarkReady: (regNo: string) => void;
+  onFee: () => void;
+  onDecline: (reason: string) => void;
+  busy: boolean;
 }) {
+  const [declining, setDeclining] = useState(false);
+  const [reason, setReason] = useState('');
   const [checks, setChecks] = useState({
     records: false,
     signature: false,
@@ -82,7 +91,7 @@ function ProcessModal({
   });
   const [regNo, setRegNo] = useState('');
 
-  const allDone = Object.values(checks).every(Boolean) && regNo.trim().length > 0;
+  const allDone = Object.values(checks).every(Boolean) && regNo.trim().length > 0 && item.feePaid;
 
   function toggle(key: keyof typeof checks) {
     setChecks(c => ({ ...c, [key]: !c[key] }));
@@ -95,11 +104,22 @@ function ProcessModal({
       onClose={onClose}
       width="520px"
       footer={
-        <div className="flex gap-3 justify-end">
-          <Button variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
-          <Button size="sm" disabled={!allDone} onClick={() => onMarkReady(regNo)}>
-            Mark as Ready
-          </Button>
+        <div className="flex gap-3 justify-end w-full">
+          {declining ? (
+            <>
+              <Button variant="secondary" size="sm" onClick={() => setDeclining(false)}>Back</Button>
+              <Button variant="destructive" size="sm" loading={busy} disabled={reason.trim().length < 10} onClick={() => onDecline(reason.trim())}>Decline request</Button>
+            </>
+          ) : (
+            <>
+              <Button variant="ghost" size="sm" onClick={() => setDeclining(true)}>Decline…</Button>
+              <div className="flex-1" />
+              <Button variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
+              <Button size="sm" loading={busy} disabled={!allDone} onClick={() => onMarkReady(regNo)}>
+                Mark ready &amp; issue signed certificate
+              </Button>
+            </>
+          )}
         </div>
       }
     >
@@ -116,10 +136,22 @@ function ProcessModal({
             ) : (
               <span className="text-[#A8242C] font-medium">Unpaid — ₹{item.fee}</span>
             )}
+            {!item.feePaid && (
+              <button onClick={onFee} disabled={busy} className="ml-2 text-[12px] text-[#E0952A] hover:underline cursor-pointer disabled:opacity-50">Record fee received</button>
+            )}
           </div>
           <div className="col-span-2"><span className="text-[#5A6577]">Purpose:</span> <span className="text-[#16264A]">{item.purpose}</span></div>
         </div>
 
+        {declining && (
+          <div className="space-y-2">
+            <InlineAlert type="warning">The student is told the reason and can request again. Nothing is issued.</InlineAlert>
+            <label className="text-[13px] font-medium text-[#16264A]">Reason the student can act on</label>
+            <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3} maxLength={500} placeholder="e.g. Records show an unpaid library fine; clear it at the library desk and request again." className="w-full px-3 py-2 text-[13px] border border-[#D3D8E0] rounded-[4px] outline-none focus:border-[#E0952A]" />
+          </div>
+        )}
+        {!declining && !item.feePaid && <InlineAlert type="warning">The fee of ₹{item.fee} must be received at the counter before this certificate can be issued.</InlineAlert>}
+        {!declining && <>
         <SectionLabel label="Actions Checklist" />
         <div className="space-y-2 px-1">
           <Checkbox
@@ -155,6 +187,8 @@ function ProcessModal({
             />
           </div>
         )}
+        {allDone && <p className="text-[12px] text-[#5A6577]">Marking ready signs the certificate with the institution's key, files its official PDF, and notifies the student.</p>}
+        </>}
       </div>
     </Modal>
   );
@@ -166,7 +200,8 @@ export default function CertificateQueue({ onModule }: Props) {
   const markFee = useMarkCertificateFee();
 
   const [search, setSearch] = useState('');
-  const [stageFilter, setStageFilter] = useState<'all' | 'college_office' | 'ready' | 'dispatched'>('all');
+  const [stageFilter, setStageFilter] = useState<'all' | 'requested' | 'college_office' | 'ready' | 'dispatched' | 'rejected'>('all');
+  const [busy, setBusy] = useState(false);
   const [priorityFilter, setPriorityFilter] = useState<'all' | 'urgent' | 'normal'>('all');
   const [sort, setSort] = useState<'oldest' | 'newest'>('oldest');
   const [processingId, setProcessingId] = useState<string | null>(null);
@@ -204,14 +239,39 @@ export default function CertificateQueue({ onModule }: Props) {
   const dueWeek = queue.filter(i => i.daysLeft !== null && i.daysLeft > 0 && i.daysLeft <= 7).length;
   const totalPending = totals?.open ?? queue.filter(i => i.stage !== 'dispatched').length;
 
+  async function recordFee(item: CertQueueItem) {
+    setBusy(true);
+    try {
+      await markFee.mutateAsync(item.requestId);
+      toast.success(`Fee of ₹${item.fee} recorded as received`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not record the fee.');
+    } finally { setBusy(false); }
+  }
+
+  async function decline(item: CertQueueItem, reason: string) {
+    setBusy(true);
+    try {
+      await advance.mutateAsync({ id: item.requestId, stage: 'REJECTED', reason });
+      setProcessing(null);
+      toast.success('Request declined — the student has been told why');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not decline that request.');
+    } finally { setBusy(false); }
+  }
+
+  async function download(item: CertQueueItem) {
+    if (!item.certificate) return;
+    try { await downloadCertificate(item.certificate); } catch (err) { toast.error(err instanceof Error ? err.message : 'Could not download the certificate.'); }
+  }
+
   async function markReady(id: string, regNo: string) {
     const item = queue.find(i => i.id === id);
     if (!item) return;
+    // Nothing leaves the counter unpaid; the fee is recorded at the counter, never assumed.
+    if (item.fee > 0 && !item.feePaid) { toast.error('Record the fee as received first'); return; }
+    setBusy(true);
     try {
-      // Nothing leaves the counter unpaid; record the fee first if it is due.
-      if (item.fee > 0 && !item.feePaid) {
-        await markFee.mutateAsync(item.requestId);
-      }
       // A request still at 'requested' has to reach the office before it is
       // ready — the server enforces the order, so walk it.
       if (item.stage === 'requested') {
@@ -223,10 +283,10 @@ export default function CertificateQueue({ onModule }: Props) {
         notes: `Register: ${regNo}`,
       });
       setProcessing(null);
-      toast.success(`Certificate marked as ready — the student has been notified. Register: ${regNo}`);
+      toast.success(`Certificate signed and issued — the student has been notified. Register: ${regNo}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not mark that certificate ready.');
-    }
+    } finally { setBusy(false); }
   }
 
   async function markDispatched(id: string) {
@@ -277,9 +337,11 @@ export default function CertificateQueue({ onModule }: Props) {
           className="h-8 px-2 text-[13px] text-[#16264A] bg-white border border-[#D3D8E0] rounded-[4px] outline-none focus:border-[#E0952A]"
         >
           <option value="all">All Stages</option>
+          <option value="requested">Requested</option>
           <option value="college_office">College Office</option>
           <option value="ready">Ready</option>
           <option value="dispatched">Dispatched</option>
+          <option value="rejected">Declined</option>
         </select>
         <select
           value={priorityFilter}
@@ -338,6 +400,16 @@ export default function CertificateQueue({ onModule }: Props) {
                     <SLABadge deadline={item.slaDeadline} />
                   </td>
                   <td className="px-4 py-3">
+                    {item.stage === 'requested' && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-[3px] bg-[#FEF9EC] text-[#8A6D1F]">
+                        Requested
+                      </span>
+                    )}
+                    {item.stage === 'rejected' && (
+                      <span title={item.rejectReason ?? ''} className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-[3px] bg-[#FEE2E2] text-[#A8242C]">
+                        Declined
+                      </span>
+                    )}
                     {item.stage === 'college_office' && (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-[3px] bg-[#EFF6FF] text-[#1D4ED8]">
                         College Office
@@ -364,16 +436,27 @@ export default function CertificateQueue({ onModule }: Props) {
                     )}
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap">
-                    {item.stage === 'college_office' && (
+                    {(item.stage === 'requested' || item.stage === 'college_office') && (
                       <Button size="sm" onClick={() => setProcessing(item)}>Process</Button>
                     )}
-                    {item.stage === 'ready' && (
-                      <Button variant="secondary" size="sm" onClick={() => markDispatched(item.id)}>
-                        Mark Dispatched
-                      </Button>
+                    {(item.stage === 'ready' || item.stage === 'dispatched') && item.certificate && (
+                      <div className="flex flex-col items-start gap-1">
+                        <span className="font-mono text-[11px] text-[#0E7A5F]">✓ Signed · {item.certificate.serialNo}</span>
+                        <div className="flex gap-2">
+                          <Button variant="ghost" size="sm" onClick={() => void download(item)}>PDF</Button>
+                          {item.stage === 'ready'
+                            ? <Button variant="secondary" size="sm" onClick={() => markDispatched(item.id)}>Mark Dispatched</Button>
+                            : <span className="text-[12px] text-[#5A6577] self-center">Dispatched</span>}
+                        </div>
+                      </div>
                     )}
-                    {item.stage === 'dispatched' && (
-                      <span className="text-[12px] text-[#5A6577]">Dispatched</span>
+                    {(item.stage === 'ready' || item.stage === 'dispatched') && !item.certificate && (
+                      item.stage === 'ready'
+                        ? <Button variant="secondary" size="sm" onClick={() => markDispatched(item.id)}>Mark Dispatched</Button>
+                        : <span className="text-[12px] text-[#5A6577]">Dispatched</span>
+                    )}
+                    {item.stage === 'rejected' && (
+                      <span className="text-[12px] text-[#5A6577]">{item.rejectReason ?? 'Declined'}</span>
                     )}
                   </td>
                 </tr>
@@ -395,6 +478,9 @@ export default function CertificateQueue({ onModule }: Props) {
           item={processing}
           onClose={() => setProcessing(null)}
           onMarkReady={(regNo) => markReady(processing.id, regNo)}
+          onFee={() => void recordFee(processing)}
+          onDecline={(reason) => void decline(processing, reason)}
+          busy={busy}
         />
       )}
     </div>

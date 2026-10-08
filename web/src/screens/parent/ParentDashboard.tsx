@@ -1,7 +1,6 @@
 import { Spinner } from '../../components/ui';
 import { useAttendance, useFees, useNotifications, useProfile, useResults } from '../../lib/queries';
-import { useCollection } from '../../lib/records';
-import { DEMO_REQUESTS, type HostelRequest } from '../../lib/hostel';
+import { useMyHostel } from '../../lib/hostel';
 import { useAuth } from '../../lib/auth';
 
 interface Props {
@@ -29,8 +28,8 @@ export default function ParentDashboard({ lang, navigate }: Props) {
   const fees = useFees();
   const results = useResults();
   const notifications = useNotifications();
-  const requests = useCollection<HostelRequest>('student:hostel-requests', DEMO_REQUESTS);
-  const consents = requests.items.filter(r => r.status === 'awaiting_parent').length;
+  const hostel = useMyHostel();
+  const consents = (hostel.data?.leaves ?? []).filter(r => r.status === 'AWAITING_PARENT').length;
 
   if (profile.isLoading) return <div className="flex justify-center py-16"><Spinner size={22} /></div>;
   if (profile.isError || !profile.data) {

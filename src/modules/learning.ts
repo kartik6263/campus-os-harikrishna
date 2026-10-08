@@ -3,6 +3,7 @@ import { prisma } from '../db.js';
 import { asyncHandler } from '../lib/http.js';
 import { requireAuth, resolveStudentId } from '../auth/middleware.js';
 import { project } from './intelligence/scoring.js';
+import { attendanceBySubject } from './attendance/policy.js';
 
 /**
  * Phase 11 — personalised learning.
@@ -31,10 +32,8 @@ interface SubjectNeed {
 const levelOf = (basis: SubjectNeed['basis'], p: number): SubjectNeed['level'] =>
   basis === 'internal marks' ? (p < 45 ? 'needs attention' : p < 60 ? 'watch' : 'on track') : p < 65 ? 'needs attention' : p < 75 ? 'watch' : 'on track';
 
-learningRouter.get(
-  ['/', '/:studentId'],
-  asyncHandler(async (req, res) => {
-    const studentId = await resolveStudentId(req);
+/** One student's learning plan: what needs work and what to study for it. */
+export async function learningPlanFor(studentId: string) {
     const student = await prisma.student.findUniqueOrThrow({
       where: { id: studentId },
       select: { name: true, enrolmentNo: true, semester: true, programme: { select: { shortName: true } } },
@@ -43,17 +42,10 @@ learningRouter.get(
     const [projection, enrolments, attendance] = await Promise.all([
       project([studentId]).then((m) => m.get(studentId) ?? null),
       prisma.enrolment.findMany({ where: { studentId }, select: { subject: { select: { id: true, code: true, name: true } } } }),
-      prisma.$queryRaw<Array<{ subjectId: string; held: bigint; present: bigint }>>`
-        SELECT cs."subjectId", COUNT(*)::bigint AS held,
-          COUNT(ar.id) FILTER (WHERE ar.status IN ('PRESENT','LATE'))::bigint AS present
-        FROM class_sessions cs
-        JOIN enrolments e ON e."subjectId" = cs."subjectId" AND e."studentId" = ${studentId}
-        LEFT JOIN attendance_records ar ON ar."sessionId" = cs.id AND ar."studentId" = ${studentId}
-        WHERE cs.date <= now()
-        GROUP BY cs."subjectId"`,
+      attendanceBySubject([studentId]),
     ]);
 
-    const attBySubject = new Map(attendance.map((a) => [a.subjectId, Number(a.held) ? Math.round((Number(a.present) / Number(a.held)) * 1000) / 10 : null]));
+    const attBySubject = new Map([...attendance.entries()].map(([k, a]) => [k.split(':')[1]!, a.total ? a.percent : null]));
     const marksByCode = new Map((projection?.subjects ?? []).map((s) => [s.code, s.percent]));
 
     const needs: Array<SubjectNeed & { id: string }> = enrolments.flatMap(({ subject }): Array<SubjectNeed & { id: string }> => {
@@ -93,13 +85,19 @@ learningRouter.get(
       return { subject: { code: t.code, name: t.name }, basis: t.basis, percent: t.percent, level: t.level, resources: [...fromTeachers, ...curated, ...open] };
     });
 
-    res.json({
+    return {
       student: { id: studentId, name: student.name, enrolmentNo: student.enrolmentNo, programme: `${student.programme.shortName} Sem ${student.semester}` },
       subjects: needs.map(({ id: _id, ...n }) => n),
       plan,
       note: projection && projection.subjects.length
         ? `Judged on approved internal marks where a sheet exists (${projection.subjects.length} subject${projection.subjects.length === 1 ? '' : 's'}), and on attendance elsewhere.`
         : 'No internal marks have been approved yet, so subjects are judged on attendance.',
-    });
+    };
+}
+
+learningRouter.get(
+  ['/', '/:studentId'],
+  asyncHandler(async (req, res) => {
+    res.json(await learningPlanFor(await resolveStudentId(req)));
   }),
 );

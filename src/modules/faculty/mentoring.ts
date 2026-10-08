@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { prisma } from '../../db.js';
 import { ApiError, asyncHandler, validate } from '../../lib/http.js';
 import { resolveFacultyId } from '../../auth/middleware.js';
-import { ATTENDANCE_THRESHOLD, attendanceFor, overallAttendance } from './shared.js';
+import { attendanceFor, overallAttendance } from './shared.js';
+import { currentPolicy } from '../attendance/policy.js';
 
 /**
  * Subject-wise attendance and internal marks for a set of students.
@@ -155,8 +156,8 @@ mentoringRouter.get(
 
         if (attendance.percent < DEBARMENT_LINE) {
           alerts.push(`Critical attendance (${attendance.percent}%) — likely debarred`);
-        } else if (attendance.percent < ATTENDANCE_THRESHOLD) {
-          alerts.push(`Attendance below ${ATTENDANCE_THRESHOLD}% (${attendance.percent}%)`);
+        } else if (attendance.percent < currentPolicy().threshold) {
+          alerts.push(`Attendance below ${currentPolicy().threshold}% (${attendance.percent}%)`);
         }
         if (latest && latest.cgpa < CGPA_FLOOR) alerts.push(`CGPA below ${CGPA_FLOOR.toFixed(1)}`);
         if (backlogs > 0) alerts.push(`${backlogs} backlog${backlogs === 1 ? '' : 's'} pending`);

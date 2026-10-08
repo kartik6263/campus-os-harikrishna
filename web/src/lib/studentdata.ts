@@ -333,40 +333,6 @@ export const RESULTS: SemResult[] = [
   },
 ];
 
-export interface HostelData {
-  allocated: boolean;
-  block: string;
-  room: string;
-  type: string;
-  roommates: string[];
-  allotmentDate: string;
-  validTill: string;
-  messBalance: number;
-  messBill: number;
-}
-
-export const HOSTEL: HostelData = {
-  allocated: true,
-  block: 'Block C (Girls)',
-  room: 'C-214',
-  type: 'Triple Sharing',
-  roommates: ['Neha Verma (BCA V)', 'Anjali Patel (BCA V)'],
-  allotmentDate: '01-07-2024',
-  validTill: '30-04-2025',
-  messBalance: 1800,
-  messBill: 2850,
-};
-
-export const MESS_MENU: Record<string, { breakfast: string; lunch: string; dinner: string }> = {
-  Mon: { breakfast: 'Poha, Chai', lunch: 'Dal Tadka, Rice, Roti, Sabzi', dinner: 'Rajma, Roti, Salad' },
-  Tue: { breakfast: 'Idli-Sambar, Chai', lunch: 'Chole, Roti, Rice, Raita', dinner: 'Dal Makhani, Roti, Rice' },
-  Wed: { breakfast: 'Upma, Chai', lunch: 'Arhar Dal, Roti, Seasonal Sabzi', dinner: 'Paneer Bhurji, Roti, Rice' },
-  Thu: { breakfast: 'Bread-Butter, Boiled Egg, Chai', lunch: 'Kadhi-Pakoda, Rice, Roti', dinner: 'Mix Veg, Roti, Rice' },
-  Fri: { breakfast: 'Paratha, Curd, Chai', lunch: 'Masoor Dal, Roti, Rice, Sabzi', dinner: 'Special: Biryani, Raita, Salad' },
-  Sat: { breakfast: 'Puri-Sabzi, Chai', lunch: 'Dal, Rice, Roti, Fried Rice', dinner: 'Palak Paneer, Roti, Rice' },
-  Sun: { breakfast: 'Halwa-Puri, Chai', lunch: 'Spl. Thali: Dal, Sabzi, Rice, Roti, Sweet', dinner: 'Khichdi, Kadhi' },
-};
-
 export interface TransportRoute {
   routeNo: string;
   name: string;

@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { Button, Modal, toast } from '../../components/ui';
+import CoverRollCall from '../../components/CoverRollCall';
 import {
   useCorrectionList,
   useDecideCorrection,
@@ -48,7 +49,8 @@ function StatTile({ value, label, color }: { value: number | string; label: stri
 }
 
 export default function FacultyDashboard({ onModule }: Props) {
-  const { data: TODAY_CLASSES } = useTodayClassList();
+  const { data: TODAY_CLASSES, date: todayDate } = useTodayClassList();
+  const [covering, setCovering] = useState<string | null>(null);
   const { data: MY_SUBJECTS } = useMySubjects();
   const { data: CORRECTION_REQUESTS } = useCorrectionList();
   const { data: MENTEES } = useMenteeList();
@@ -119,6 +121,8 @@ export default function FacultyDashboard({ onModule }: Props) {
 
   return (
     <div className="p-6 space-y-6">
+      <CoverRollCall slotId={covering} date={todayDate ? String(todayDate).slice(0, 10) : new Date().toISOString().slice(0, 10)} onClose={() => setCovering(null)} />
+
       {/* ── Quick Stats ── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatTile value={totalStudents} label="Students Taught" color="#16264A" />
@@ -149,15 +153,23 @@ export default function FacultyDashboard({ onModule }: Props) {
                           CANCELLED
                         </span>
                       )}
+                      {cls.extra && <span className="text-[10px] font-semibold px-2 py-0.5 rounded-[2px] bg-[#EFF6FF] text-[#1D4ED8]">EXTRA</span>}
+                      {cls.coveringFor && <span className="text-[10px] font-semibold px-2 py-0.5 rounded-[2px] bg-[#FEF9EC] text-[#8A6D1F]">COVERING FOR {cls.coveringFor.toUpperCase()}</span>}
+                      {cls.coveredBy && <span className="text-[10px] font-semibold px-2 py-0.5 rounded-[2px] bg-[#EDEFF3] text-[#5A6577]">{cls.coveredBy.toUpperCase()} COVERING</span>}
                     </div>
                     <p className="text-[14px] font-semibold text-[#16264A] mt-0.5 truncate">{cls.subject}</p>
                     <p className="text-[11px] text-[#5A6577] font-mono">{cls.code}</p>
                     <p className="text-[12px] text-[#5A6577] mt-0.5">
                       {cls.classLabel} · {cls.room}
                     </p>
+                    {cls.cancelled && cls.cancelReason && <p className="text-[11px] text-[#A8242C] mt-0.5">{cls.cancelReason}</p>}
                   </div>
                   <div className="flex-shrink-0 flex flex-col items-end gap-1">
-                    {!cls.cancelled && cls.attendanceMarked ? (
+                    {!cls.cancelled && cls.coveringFor ? (
+                      <Button size="sm" variant={cls.attendanceMarked ? 'secondary' : 'primary'} onClick={() => setCovering(cls.slotId)}>
+                        {cls.attendanceMarked ? `Marked (${cls.studentsPresent}/${cls.totalStudents})` : 'Take roll call'}
+                      </Button>
+                    ) : cls.coveredBy ? null : !cls.cancelled && cls.attendanceMarked ? (
                       <>
                         <span className="text-[11px] font-medium text-[#0E7A5F] bg-[#E8F5F1] px-2 py-0.5 rounded-[2px]">
                           Marked ({cls.studentsPresent}/{cls.totalStudents})

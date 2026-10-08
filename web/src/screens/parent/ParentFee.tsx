@@ -3,6 +3,7 @@ import { Spinner, toast } from '../../components/ui';
 import { useFees, usePayFeeItem, usePayInstalment, useProfile } from '../../lib/queries';
 import { ApiError } from '../../lib/api';
 import { downloadPdf } from '../../lib/export';
+import { statementPdf, useMyStatement } from '../../lib/feeadmin';
 
 interface Props { lang: 'hi' | 'en' }
 
@@ -17,6 +18,7 @@ export default function ParentFee({ lang }: Props) {
   const payItem = usePayFeeItem();
   const [confirming, setConfirming] = useState<string | null>(null);
   const [payingItem, setPayingItem] = useState<string | null>(null);
+  const statement = useMyStatement();
 
   if (isLoading) return <div className="flex justify-center py-16"><Spinner size={22} /></div>;
   if (!f) return <p className="p-6 text-center text-[14px] text-[#5A6577]">{t(lang, 'No fee records yet.', 'अभी कोई शुल्क विवरण नहीं।')}</p>;
@@ -66,6 +68,7 @@ export default function ParentFee({ lang }: Props) {
         <p className="text-gray-500 text-xs mb-1">{t(lang, 'Outstanding amount', 'बकाया राशि')}</p>
         <p className={`text-5xl font-bold ${f.summary.due > 0 ? 'text-red-600' : 'text-[#0E7A5F]'}`}>{inr(f.summary.due)}</p>
         <p className="text-gray-400 text-xs mt-1">{inr(f.summary.paid)} {t(lang, 'paid of', 'भुगतान, कुल')} {inr(f.summary.total)}</p>
+        <button disabled={!statement.data} onClick={() => statement.data && statementPdf(statement.data)} className="mt-3 text-xs text-[#E0952A] font-semibold cursor-pointer disabled:opacity-50">{t(lang, 'Download full statement (PDF)', 'पूरा विवरण डाउनलोड करें (PDF)')}</button>
       </div>
 
       {f.instalments.length > 0 && (

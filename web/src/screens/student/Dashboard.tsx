@@ -14,8 +14,8 @@ import {
   useFeeRecord,
   useStudentRecord,
   useSubjects,
-  useTimetable,
 } from '../../lib/queries';
+import { DAY_NAME, shortDate, useWeek } from '../../lib/timetable';
 import { StatusPill } from '../../components/ui';
 import { STATUS_LABEL, useMyVerification } from '../../lib/verification';
 
@@ -112,66 +112,41 @@ function ChevronRight() {
 // ─── Section: Today's Timetable ───────────────────────────────────────────────
 
 function TodayTimetable() {
-  const { data: TIMETABLE } = useTimetable();
-  const slots = (TIMETABLE['Mon'] ?? []).slice(0, 3);
+  const { data: week } = useWeek({ scope: 'me' });
+  if (!week) return null;
+  const day = week.days.find((d) => d.date === week.today);
+  // Sunday, or a day past Saturday: show the next day with classes.
+  const shown = day ?? week.days.find((d) => d.date > week.today) ?? null;
+  const slots = shown?.classes ?? [];
+  const label = !shown ? 'This week' : shown.date === week.today ? `Today — ${DAY_NAME[shown.day]}` : `Next — ${DAY_NAME[shown.day]} ${shortDate(shown.date)}`;
 
   return (
     <section>
-      <SectionLabel>Today's Timetable — Monday</SectionLabel>
+      <SectionLabel>{label}</SectionLabel>
       <div className="bg-white">
-        {slots.map((slot, i) => (
-          <div
-            key={slot.code + slot.time}
-            className={`flex items-start px-4 py-3 gap-3${i < slots.length - 1 ? ' border-b border-[#D3D8E0]' : ''}`}
-          >
-            {/* Time column */}
-            <div className="flex-shrink-0 w-[88px]">
-              <span
-                className="text-[12px] text-[#5A6577] leading-tight"
-                style={{ fontFamily: "'IBM Plex Mono', monospace" }}
-              >
-                {slot.time}
-              </span>
+        {shown?.holiday && <p className="px-4 py-3 text-[13px] text-[#5A6577]">Holiday — {shown.holiday}</p>}
+        {!shown?.holiday && slots.length === 0 && <p className="px-4 py-3 text-[13px] text-[#5A6577]">No classes{shown ? '' : ' left this week'}.</p>}
+        {slots.map((slot, i) => {
+          const off = slot.status !== 'SCHEDULED';
+          return (
+            <div key={`${slot.id}-${slot.date}`} className={`flex items-start px-4 py-3 gap-3${i < slots.length - 1 ? ' border-b border-[#D3D8E0]' : ''}`}>
+              <div className="flex-shrink-0 w-[88px]">
+                <span className="text-[12px] text-[#5A6577] leading-tight" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{slot.startTime}–{slot.endTime}</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <span className={`text-[14px] font-medium leading-tight block ${off ? 'line-through text-[#5A6577]' : 'text-[#16264A]'}`}>{slot.code}</span>
+                <span className="text-[12px] text-[#5A6577] mt-0.5 block truncate">{slot.subject} · {slot.faculty}</span>
+                {slot.note && <span className={`text-[12px] mt-0.5 block ${off ? 'text-[#A8242C]' : 'text-[#8A6D1F]'}`}>{slot.note}</span>}
+              </div>
+              <div className="flex-shrink-0 flex flex-col items-end gap-1">
+                {off
+                  ? <span className="text-[11px] font-semibold text-white bg-[#A8242C] px-1.5 py-0.5 rounded-[2px] leading-none">Cancelled</span>
+                  : <span className="text-[12px] text-[#5A6577]" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{slot.room}</span>}
+                {slot.kind === 'EXTRA' && <span className="text-[10px] font-semibold text-[#1D4ED8]">Extra</span>}
+              </div>
             </div>
-
-            {/* Subject info */}
-            <div className="flex-1 min-w-0">
-              {slot.cancelled ? (
-                <>
-                  <span className="line-through text-[14px] font-medium text-[#5A6577] leading-tight block">
-                    {slot.code} — {slot.subject}
-                  </span>
-                  {slot.cancelReason && (
-                    <span className="text-[12px] text-[#A8242C] mt-0.5 block">{slot.cancelReason}</span>
-                  )}
-                </>
-              ) : (
-                <>
-                  <span className="text-[14px] font-medium text-[#16264A] leading-tight block">
-                    {slot.code}
-                  </span>
-                  <span className="text-[12px] text-[#5A6577] mt-0.5 block truncate">{slot.subject}</span>
-                </>
-              )}
-            </div>
-
-            {/* Room + cancelled badge */}
-            <div className="flex-shrink-0 flex flex-col items-end gap-1">
-              {slot.cancelled ? (
-                <span className="text-[11px] font-semibold text-white bg-[#A8242C] px-1.5 py-0.5 rounded-[2px] leading-none">
-                  Cancelled
-                </span>
-              ) : (
-                <span
-                  className="text-[12px] text-[#5A6577]"
-                  style={{ fontFamily: "'IBM Plex Mono', monospace" }}
-                >
-                  {slot.room}
-                </span>
-              )}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </section>
   );

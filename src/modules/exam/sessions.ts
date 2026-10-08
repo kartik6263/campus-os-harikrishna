@@ -4,6 +4,8 @@ import { prisma } from '../../db.js';
 import { ApiError, asyncHandler, validate } from '../../lib/http.js';
 import { requireStatus, resolveExamStaffId } from './shared.js';
 import { recordFor } from '../itconsole/audit.js';
+import { openCases } from './conduct.js';
+import { recomputeStanding } from './standing.js';
 
 export const sessionsRouter = Router();
 
@@ -309,7 +311,12 @@ sessionsRouter.post(
       }
     }
 
-    if (status === 'RESULT_PUBLISHED' && session._count.results === 0) {
+    if (status === 'RESULT_PROCESSING') {
+      const open = await openCases(id);
+      if (open > 0) throw ApiError.badRequest(`${open} unfair-means case(s) are still undecided. The committee must decide them first.`, { openCases: open });
+    }
+
+    if (status === 'RESULT_PUBLISHED' && session._count.results === 0 && (await prisma.backlogResult.count({ where: { sessionId: id } })) === 0) {
       throw ApiError.badRequest('No results have been processed for this session');
     }
 
@@ -323,6 +330,22 @@ sessionsRouter.post(
           where: { sessionId: id },
           data: { published: true, publishedAt: now },
         });
+
+        // Backlog papers cleared in this sitting go into the marksheet of the semester they belong to.
+        const backlogs = await tx.backlogResult.findMany({ where: { sessionId: id, applied: false } });
+        for (const b of backlogs) {
+          const row = await tx.subjectResult.findFirst({ where: { subjectId: b.subjectId, result: { studentId: b.studentId, semester: b.semester } } });
+          if (row && (b.passed || b.total > row.total)) {
+            await tx.subjectResult.update({ where: { id: row.id }, data: { external: b.external, total: b.total, grade: b.grade, passed: b.passed } });
+            await recomputeStanding(tx, b.studentId, b.semester);
+          }
+          await tx.backlogResult.update({ where: { id: b.id }, data: { applied: true } });
+        }
+        if (backlogs.length) {
+          await tx.notification.createMany({
+            data: backlogs.map((b) => ({ studentId: b.studentId, kind: 'RESULT' as const, title: b.passed ? 'Backlog cleared' : 'Backlog result declared', body: `Semester ${b.semester} paper: ${b.total} marks, grade ${b.grade}.`, href: '/results' })),
+          });
+        }
 
         const holders = await tx.semesterResult.findMany({
           where: { sessionId: id },

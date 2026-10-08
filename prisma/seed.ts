@@ -26,6 +26,17 @@ async function main() {
   // Wipe demo data in dependency order.
   await prisma.$transaction([
     // Phase 11: workspace registers, attachments and sign-in codes stand alone.
+    prisma.hostelBillRun.deleteMany(),
+    prisma.hostelRollCallEntry.deleteMany(),
+    prisma.hostelMessMenu.deleteMany(),
+    prisma.hostelVisitor.deleteMany(),
+    prisma.hostelLeave.deleteMany(),
+    prisma.hostelComplaint.deleteMany(),
+    prisma.hostelRoomChange.deleteMany(),
+    prisma.hostelAllotment.deleteMany(),
+    prisma.hostelApplication.deleteMany(),
+    prisma.hostelRoom.deleteMany(),
+    prisma.hostel.deleteMany(),
     prisma.workspaceRecord.deleteMany(),
     prisma.workspaceCollection.deleteMany(),
     prisma.storedFile.deleteMany(),
@@ -58,6 +69,11 @@ async function main() {
     prisma.revaluationApplication.deleteMany(),
     prisma.answerScript.deleteMany(),
     prisma.answerBundle.deleteMany(),
+    prisma.examiner.deleteMany(),
+    prisma.malpracticeCase.deleteMany(),
+    prisma.backlogResult.deleteMany(),
+    prisma.feeDayClose.deleteMany(),
+    prisma.feeStructure.deleteMany(),
     prisma.seatAllocation.deleteMany(),
     prisma.examPaper.deleteMany(),
     // Phase 3 next: these hang off students, subjects, payments and users.
@@ -87,11 +103,20 @@ async function main() {
     prisma.payment.deleteMany(),
     prisma.instalment.deleteMany(),
     prisma.feeItem.deleteMany(),
+    prisma.digitalCertificate.deleteMany(),
     prisma.scholarshipAward.deleteMany(),
     prisma.notification.deleteMany(),
+    prisma.tripBoarding.deleteMany(),
+    prisma.tripStopEvent.deleteMany(),
+    prisma.transportIncident.deleteMany(),
+    prisma.transportTrip.deleteMany(),
+    prisma.transportRequest.deleteMany(),
     prisma.busPass.deleteMany(),
     prisma.routeStop.deleteMany(),
     prisma.transportRoute.deleteMany(),
+    prisma.vehicleLog.deleteMany(),
+    prisma.vehicle.deleteMany(),
+    prisma.transportCrew.deleteMany(),
     prisma.announcement.deleteMany(),
     prisma.enrolment.deleteMany(),
     prisma.subject.deleteMany(),
@@ -230,6 +255,7 @@ async function main() {
       endTime: '10:00',
       room: s.room,
       faculty: s.faculty,
+      markedAt: new Date(Date.UTC(2024, 6, 15 + i, 4, 45)),
     }));
     await prisma.classSession.createMany({ data: sessions });
 
@@ -240,10 +266,10 @@ async function main() {
     });
 
     await prisma.attendanceRecord.createMany({
-      data: created.slice(0, s.present).map((c) => ({
+      data: created.map((c, i) => ({
         studentId: student.id,
         sessionId: c.id,
-        status: 'PRESENT' as const,
+        status: i < s.present ? ('PRESENT' as const) : ('ABSENT' as const),
         source: 'SEED',
       })),
     });
@@ -289,6 +315,31 @@ async function main() {
       },
     });
   }
+
+  // ── Rooms and the bell schedule ────────────────────────────────────────────
+
+  const ROOMS: Array<[string, string, number, 'CLASSROOM' | 'LAB' | 'HALL' | 'SEMINAR']> = [
+    ['CS-101', 'Main block', 60, 'CLASSROOM'], ['CS-201', 'Main block', 60, 'CLASSROOM'], ['CS-202', 'Main block', 60, 'CLASSROOM'],
+    ['CS-203', 'Main block', 60, 'CLASSROOM'], ['CS-204', 'Main block', 40, 'CLASSROOM'], ['Lab-2', 'Computer centre', 30, 'LAB'],
+    ['Lab-3', 'Computer centre', 30, 'LAB'], ['Seminar Hall', 'Main block', 150, 'SEMINAR'],
+  ];
+  await prisma.room.deleteMany();
+  for (const [code, building, capacity, kind] of ROOMS) {
+    await prisma.room.upsert({ where: { code }, create: { code, building, capacity, kind }, update: { building, capacity, kind, active: true } });
+  }
+  await prisma.bellPeriod.deleteMany();
+  await prisma.bellPeriod.createMany({
+    data: [
+      { label: 'Period 1', startTime: '09:00', endTime: '10:00' },
+      { label: 'Period 2', startTime: '10:00', endTime: '11:00' },
+      { label: 'Short break', startTime: '11:00', endTime: '11:15', isBreak: true },
+      { label: 'Period 3', startTime: '11:15', endTime: '12:15' },
+      { label: 'Lunch', startTime: '12:15', endTime: '13:00', isBreak: true },
+      { label: 'Period 4', startTime: '13:00', endTime: '14:00' },
+      { label: 'Period 5', startTime: '14:00', endTime: '15:00' },
+      { label: 'Period 6', startTime: '15:00', endTime: '16:00' },
+    ],
+  });
 
   // ── Fees ───────────────────────────────────────────────────────────────────
 
@@ -404,29 +455,49 @@ async function main() {
 
   // ── Transport ──────────────────────────────────────────────────────────────
 
+  const nextYear = new Date(Date.now() + 300 * 86_400_000);
+  const [bus7, bus12] = await Promise.all([
+    prisma.vehicle.create({ data: { regNo: 'MP07-GC-4892', kind: 'BUS', make: 'Tata Starbus 41-seater', capacity: 40, ownership: 'OWNED', fitnessValidTill: nextYear, insuranceValidTill: nextYear, permitValidTill: nextYear, pucValidTill: new Date(Date.now() + 20 * 86_400_000), odometer: 84210 } }),
+    prisma.vehicle.create({ data: { regNo: 'MP07-GC-5120', kind: 'MINIBUS', make: 'Force Traveller 26-seater', capacity: 25, ownership: 'HIRED', operator: 'Shree Ganesh Travels', fitnessValidTill: nextYear, insuranceValidTill: nextYear, permitValidTill: nextYear, pucValidTill: nextYear, odometer: 51870 } }),
+  ]);
+  const [ramesh, suresh, kamla] = await Promise.all([
+    prisma.transportCrew.create({ data: { name: 'Shri Ramesh Yadav', phone: '+91 94066 21188', role: 'DRIVER', licenceNo: 'MP07 20110012345', licenceValidTill: nextYear, verifiedOn: d('2024-06-12') } }),
+    prisma.transportCrew.create({ data: { name: 'Shri Suresh Kushwah', phone: '+91 94254 77310', role: 'DRIVER', licenceNo: 'MP07 20150044871', licenceValidTill: nextYear, verifiedOn: d('2024-06-12') } }),
+    prisma.transportCrew.create({ data: { name: 'Smt. Kamla Devi', phone: '+91 98931 40021', role: 'ATTENDANT', verifiedOn: d('2024-06-15') } }),
+  ]);
   const route = await prisma.transportRoute.create({
     data: {
-      routeNo: 'R-07',
-      name: 'Sector 4 — Model College',
-      busNo: 'MP07-GC-4892',
-      driver: 'Shri Ramesh Yadav',
-      driverPhone: '+91 94066 21188',
-      currentStop: 2,
-      stops: {
-        create: [
-          { name: 'Sector 4 Crossing', time: '08:05 AM', order: 0 },
-          { name: 'Sector 4', time: '08:12 AM', order: 1 },
-          { name: 'Gandhi Road', time: '08:20 AM', order: 2 },
-          { name: 'Company Bagh', time: '08:28 AM', order: 3 },
-          { name: 'Model College Gate', time: '08:40 AM', order: 4 },
-        ],
-      },
+      routeNo: 'R-07', name: 'Sector 4 — Model College', vehicleId: bus7.id, driverId: ramesh.id, attendantId: kamla.id,
+      stops: { create: [
+        { name: 'Sector 4 Crossing', time: '08:05', order: 0, fare: 4500 },
+        { name: 'Sector 4', time: '08:12', order: 1, fare: 4200 },
+        { name: 'Gandhi Road', time: '08:20', order: 2, fare: 3600 },
+        { name: 'Company Bagh', time: '08:28', order: 3, fare: 3000 },
+        { name: 'Model College Gate', time: '08:40', order: 4, fare: 0 },
+      ] },
+    },
+    include: { stops: true },
+  });
+  await prisma.transportRoute.create({
+    data: {
+      routeNo: 'R-12', name: 'Thatipur — Model College', vehicleId: bus12.id, driverId: suresh.id,
+      stops: { create: [
+        { name: 'Thatipur Chauraha', time: '07:55', order: 0, fare: 5000 },
+        { name: 'Govindpuri', time: '08:06', order: 1, fare: 4400 },
+        { name: 'City Centre', time: '08:18', order: 2, fare: 3800 },
+        { name: 'Model College Gate', time: '08:38', order: 3, fare: 0 },
+      ] },
     },
   });
-
+  // Priya travels from Sector 4 on a pass paid at admission, before fees were linked to passes.
+  const priyaStop = route.stops.find((x) => x.order === 1)!;
   await prisma.busPass.create({
-    data: { studentId: student.id, routeId: route.id, valid: true, validTill: d('2024-10-31') },
+    data: { passNo: 'BP/2024/000001', studentId: student.id, routeId: route.id, stopId: priyaStop.id, term: TERM, fee: priyaStop.fare, feeHead: null, status: 'ACTIVE', valid: true, validTill: new Date(Date.now() + 120 * 86_400_000), issuedBy: 'Smt. Pushpa Sharma' },
   });
+  await prisma.vehicleLog.createMany({ data: [
+    { vehicleId: bus7.id, kind: 'FUEL', date: new Date(Date.now() - 6 * 86_400_000), odometer: 83980, litres: 62, cost: 5890, vendor: 'Indian Oil, Gandhi Road', by: 'Smt. Pushpa Sharma' },
+    { vehicleId: bus7.id, kind: 'SERVICE', date: new Date(Date.now() - 40 * 86_400_000), odometer: 82100, cost: 14200, vendor: 'Tata Motors service centre', notes: 'Periodic service; brake pads replaced', by: 'Smt. Pushpa Sharma' },
+  ] });
 
   // ── Announcements ──────────────────────────────────────────────────────────
 
@@ -577,6 +648,7 @@ async function main() {
         rollNo: `GMC/BCA/2021/${mate.roll}`,
         name: mate.name,
         nameHi: mate.nameHi,
+        gender: ['Anjali Patel', 'Sunita Yadav', 'Neha Gupta', 'Pooja Sharma', 'Kavita Jain'].includes(mate.name) ? 'Female' : 'Male',
         dob: d('2003-06-01'),
         semester: 5,
         year: 3,
@@ -605,10 +677,10 @@ async function main() {
       const sessions = sessionsBySubject.get(s.code) ?? [];
       const present = Math.round((mate.attendance / 100) * sessions.length);
       await prisma.attendanceRecord.createMany({
-        data: sessions.slice(0, present).map((id) => ({
+        data: sessions.map((id, i) => ({
           studentId: record.id,
           sessionId: id,
-          status: 'PRESENT' as const,
+          status: i < present ? ('PRESENT' as const) : ('ABSENT' as const),
           source: 'SEED',
         })),
       });
@@ -997,6 +1069,12 @@ async function main() {
   }
 
 
+  // Two of the class failed Computer Architecture last year and re-sit it as a backlog.
+  for (const name of ['Deepak Singh', 'Ravi Chouhan']) {
+    const form = await prisma.examForm.findFirst({ where: { studentId: classmateIds.get(name)!, term: TERM } });
+    if (form) await prisma.examFormSubject.create({ data: { formId: form.id, subjectId: subjectByCode.get('BCA402')!, kind: 'BACKLOG' } });
+  }
+
   // ══ Phase 4 — the examination back-office ════════════════════════════════
 
   const CENTRES = [
@@ -1011,6 +1089,17 @@ async function main() {
   ];
 
   await prisma.examCentre.createMany({ data: CENTRES });
+
+  // The university's evaluation panel.
+  await prisma.examiner.createMany({
+    data: [
+      { name: 'Dr. S.K. Pandey', designation: 'Associate Professor', institution: 'Model College, Demo City', subjects: 'BCA501, BCA504', mobile: '9425012345', email: 'sk.pandey@modelcollege.example.in' },
+      { name: 'Dr. P. Gupta', designation: 'Professor', institution: 'Saraswati College, Demo City', subjects: 'BCA502, BCA503', mobile: '9425023456' },
+      { name: 'Dr. A. Verma', designation: 'Associate Professor', institution: 'Rani Durgavati PG College', subjects: 'BCA503, BCA505' },
+      { name: 'Prof. K. Tiwari', designation: 'Professor', institution: 'Govt. Degree College, Northfield', subjects: 'BCA501' },
+      { name: 'Dr. V.K. Srivastava', designation: 'Professor & Head', institution: 'University Department of Computer Science', subjects: 'BCA501, BCA502, BCA503' },
+    ],
+  });
 
   // The sitting the back-office is working on. It starts with the form window
   // closed, which is the point at which centres are allocated.
@@ -1048,6 +1137,10 @@ async function main() {
     });
     paperIndex += 1;
   }
+  // The backlog paper of the fourth semester, sat in the same sitting.
+  await prisma.examPaper.create({
+    data: { sessionId: examSession.id, subjectId: subjectByCode.get('BCA402')!, examDate: d('2024-11-18'), examTime: '14:00–17:00', maxExternal: 70, maxInternal: 30 },
+  });
 
   // A previous sitting, already published, so the student portal has history
   // that did not come from Phase 1's hand-written results.
@@ -1662,6 +1755,61 @@ async function main() {
       qrExpiresAt: new Date(Date.now() + 365 * 86_400_000),
     },
   });
+
+  // ── Hostels: two hostels, their rooms and menu, and residents ─────────────
+  const hostels = [
+    { code: 'GH', name: 'Sarojini Naidu Girls\' Hostel', gender: 'GIRLS' as const, wardenName: 'Smt. Anita Rai', wardenPhone: '+91 94250 11223', address: 'North Campus, near Gate 2', amenities: ['Wi-Fi', 'Reading room', 'RO drinking water', 'Laundry', 'CCTV at entrances', 'Common room with TV', 'Power backup'], rules: 'Gates close at 9:00 pm. Visitors in the common room only, 4–7 pm. Leave needs a parent\'s consent.', messRatePerMonth: 3200 },
+    { code: 'BH', name: 'Aryabhatta Boys\' Hostel', gender: 'BOYS' as const, wardenName: 'Dr. Sunil Patel', wardenPhone: '+91 94250 33445', address: 'South Campus', amenities: ['Wi-Fi', 'Gym', 'Indoor games', 'RO drinking water', 'Laundry', 'Power backup'], rules: 'Gates close at 10:00 pm. No visitors in rooms. Ragging is a criminal offence.', messRatePerMonth: 3000 },
+  ];
+  const hostelIds = new Map<string, string>();
+  for (const h of hostels) {
+    const row = await prisma.hostel.create({ data: h });
+    hostelIds.set(h.code, row.id);
+    const rooms = [];
+    for (let floor = 1; floor <= 3; floor++) {
+      for (let n = 1; n <= 8; n++) {
+        const capacity = n <= 2 ? 1 : n <= 5 ? 2 : 3;
+        rooms.push({ hostelId: row.id, roomNo: `${floor}${String(n).padStart(2, '0')}`, floor, capacity, ac: capacity === 1, attachedBath: capacity < 3, amenities: ['Bed with mattress', 'Wardrobe', 'Study table and chair', 'Ceiling fan'], rentPerSemester: capacity === 1 ? 24000 : capacity === 2 ? 16000 : 12000, status: floor === 3 && n === 8 ? 'MAINTENANCE' as const : 'AVAILABLE' as const, notes: floor === 3 && n === 8 ? 'Seepage in the ceiling; repair scheduled' : null });
+      }
+    }
+    await prisma.hostelRoom.createMany({ data: rooms });
+    const MENU = [
+      ['Poha, jalebi, tea', 'Rajma, rice, roti, salad', 'Samosa, tea', 'Paneer butter masala, roti, dal, rice, kheer'],
+      ['Idli, sambar, chutney, coffee', 'Chole, rice, roti, raita', 'Biscuits, tea', 'Mix veg, roti, dal tadka, rice'],
+      ['Aloo paratha, curd, tea', 'Kadhi, rice, roti, papad', 'Bread pakora, tea', 'Aloo gobhi, roti, dal, rice'],
+      ['Upma, banana, tea', 'Dal makhani, jeera rice, roti', 'Sprouts chaat, tea', 'Bhindi masala, roti, dal, rice'],
+      ['Dosa, sambar, coffee', 'Sambar, rice, roti, papad', 'Pakoras, tea', 'Egg curry / paneer, roti, rice'],
+      ['Puri, aloo sabzi, tea', 'Veg biryani, raita', 'Maggi, tea', 'Matar paneer, roti, dal, rice'],
+      ['Chole bhature, lassi', 'Special thali, gulab jamun', 'Fruit, tea', 'Khichdi, kadhi, papad'],
+    ];
+    await prisma.hostelMessMenu.createMany({ data: MENU.map(([breakfast, lunch, snacks, dinner], day) => ({ hostelId: row.id, day, breakfast: breakfast!, lunch: lunch!, snacks: snacks!, dinner: dinner!, updatedBy: h.wardenName })) });
+  }
+  const roomOf = async (code: string, roomNo: string) => (await prisma.hostelRoom.findUniqueOrThrow({ where: { hostelId_roomNo: { hostelId: hostelIds.get(code)!, roomNo } } })).id;
+  const year = new Date().getMonth() >= 6 ? new Date().getFullYear() : new Date().getFullYear() - 1;
+  const ay = `${year}-${String((year + 1) % 100).padStart(2, '0')}`;
+  const residents: Array<[string, string, string, string]> = [
+    [student.id, 'GH', '104', 'A'],
+    [classmateIds.get('Anjali Patel')!, 'GH', '104', 'B'],
+    [classmateIds.get('Kavita Jain')!, 'GH', '106', 'A'],
+    [classmateIds.get('Rahul Verma')!, 'BH', '106', 'A'],
+    [classmateIds.get('Deepak Singh')!, 'BH', '106', 'B'],
+    [classmateIds.get('Arun Kumar')!, 'BH', '201', 'A'],
+  ];
+  let serial = 0;
+  const allotmentIds = new Map<string, string>();
+  for (const [sid, code, roomNo, bed] of residents) {
+    const roomId = await roomOf(code, roomNo);
+    const a = await prisma.hostelAllotment.create({ data: { allotmentNo: `HA/${code}/${year}/${String(++serial).padStart(5, '0')}`, studentId: sid, roomId, bed, academicYear: ay, activeStudent: sid, activeBed: `${roomId}:${bed}`, allottedBy: 'Smt. Anita Rai', checkedInAt: d('2024-07-20') } });
+    allotmentIds.set(sid, a.id);
+  }
+  await prisma.hostelApplication.createMany({ data: [
+    { applicationNo: `HAP/${ay}/00001`, studentId: classmateIds.get('Neha Gupta')!, academicYear: ay, preferredHostelId: hostelIds.get('GH')!, roomPreference: 'DOUBLE', distanceKm: 140, reason: 'Home is in Sagar; daily travel is not possible.', priorityScore: 45 },
+    { applicationNo: `HAP/${ay}/00002`, studentId: classmateIds.get('Sanjay Mishra')!, academicYear: ay, preferredHostelId: hostelIds.get('BH')!, roomPreference: 'ANY', distanceKm: 35, reason: 'Two buses each way; I miss the first lecture most days.', priorityScore: 25 },
+    { applicationNo: `HAP/${ay}/00003`, studentId: classmateIds.get('Ravi Chouhan')!, academicYear: ay, roomPreference: 'TRIPLE', distanceKm: 210, specialNeeds: 'Asthma — needs a ground or first floor room', reason: 'From a village in Betul district.', priorityScore: 75 },
+  ] });
+  await prisma.hostelComplaint.create({ data: { ticketNo: `HC/GH/${new Date().getFullYear()}/00001`, studentId: student.id, hostelId: hostelIds.get('GH')!, roomId: await roomOf('GH', '104'), category: 'Plumbing', priority: 'NORMAL', description: 'The bathroom tap has been leaking for two days.', status: 'ASSIGNED', assignedTo: 'Plumber — Ramesh', dueBy: new Date(Date.now() + 24 * 3_600_000) } });
+  const leaveFrom = new Date(Date.now() + 3 * 86_400_000);
+  await prisma.hostelLeave.create({ data: { passNo: `LV/${new Date().getFullYear()}/000001`, studentId: student.id, kind: 'LEAVE', leaveFrom, leaveTo: new Date(leaveFrom.getTime() + 2 * 86_400_000), destination: 'Home, Indore', reason: 'Cousin\'s wedding', status: 'AWAITING_PARENT', parentConsent: 'PENDING' } });
 
   console.log(`
 Seed complete.

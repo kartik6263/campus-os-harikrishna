@@ -1,5 +1,6 @@
 import { Spinner } from '../../components/ui';
 import { useAttendance, useProfile } from '../../lib/queries';
+import { CondonationSection, LeaveSection } from '../../components/AttendanceLeave';
 
 interface Props { lang: 'hi' | 'en' }
 
@@ -42,10 +43,16 @@ export default function ParentAttendance({ lang }: Props) {
             </div>
             <p className="text-xs mt-2 text-gray-500">
               {sub.present}/{sub.total} {t(lang, 'classes', 'कक्षाएं')}
+              {sub.warning && <span className="text-[#8A6D1F] font-medium"> · {t(lang, 'close to the minimum', 'न्यूनतम के करीब')}</span>}
               {!sub.meetsThreshold && <span className="text-red-600 font-medium"> · {t(lang, `needs the next ${sub.classesNeeded} classes without a miss`, `अगली ${sub.classesNeeded} कक्षाओं में लगातार उपस्थिति ज़रूरी`)}</span>}
             </p>
           </div>
         ))}
+      </div>
+
+      <div className="mt-2">
+        <CondonationSection readOnly />
+        <LeaveSection readOnly />
       </div>
     </div>
   );

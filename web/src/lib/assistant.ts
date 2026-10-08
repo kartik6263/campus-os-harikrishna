@@ -11,12 +11,20 @@ export interface ChatTurn {
   content: string;
   /** Which record lookups the answer drew on. */
   lookups?: string[];
-  mode?: 'claude' | 'builtin';
+  mode?: AssistantMode;
+  /** Set when the model failed and the built-in reports answered instead. */
+  notice?: string | null;
   ms?: number;
   error?: boolean;
 }
 
-interface ChatResponse { reply: string; mode: 'claude' | 'builtin'; lookups: string[]; scope: string; ms: number }
+export type AssistantMode = 'gemini' | 'claude' | 'builtin';
+
+interface ChatResponse { reply: string; mode: AssistantMode; model: string | null; notice: string | null; lookups: string[]; scope: string; ms: number }
+
+export interface AssistantStatus { mode: AssistantMode; model: string | null; transcription: boolean; insights: 'gemini' | 'builtin'; insightsModel: string | null }
+
+export const MODE_LABEL: Record<AssistantMode, string> = { gemini: '✦ Gemini', claude: '✦ Claude', builtin: 'Built-in reports' };
 
 export const LOOKUP_LABELS: Record<string, string> = {
   institution_overview: 'Institution overview',
@@ -25,6 +33,12 @@ export const LOOKUP_LABELS: Record<string, string> = {
   fee_defaulters: 'Fee ledger',
   low_attendance: 'Attendance register',
   compare: 'College comparison',
+  my_attendance: 'Attendance',
+  my_fees: 'Fee ledger',
+  my_results: 'Results',
+  my_timetable: 'Timetable',
+  my_learning_plan: 'Learning plan',
+  my_standing: 'Standing on the rolls',
 };
 
 const KEY = 'resolion.assistant.thread';
@@ -34,7 +48,7 @@ function load(): ChatTurn[] {
 }
 
 export const useAssistantStatus = () =>
-  useQuery({ queryKey: ['assistant', 'status'], queryFn: () => api<{ mode: 'claude' | 'builtin'; model: string | null }>('/api/assistant/status'), staleTime: 300_000 });
+  useQuery({ queryKey: ['assistant', 'status'], queryFn: () => api<AssistantStatus>('/api/assistant/status'), staleTime: 300_000 });
 
 /** A conversation with the assistant, kept for the browser session. */
 export function useAssistant() {
@@ -56,7 +70,7 @@ export function useAssistant() {
         method: 'POST',
         body: { messages: history.slice(-20).map(({ role, content }) => ({ role, content })) },
       });
-      const turn: ChatTurn = { role: 'assistant', content: res.reply, lookups: res.lookups, mode: res.mode, ms: res.ms };
+      const turn: ChatTurn = { role: 'assistant', content: res.reply, lookups: res.lookups, mode: res.mode, notice: res.notice, ms: res.ms };
       setTurns(t => [...t, turn]);
       return turn;
     } catch (err) {
@@ -92,21 +106,49 @@ const Recognizer = (): (new () => Recognition) | null => {
 };
 
 export const speechSupported = () => Boolean(Recognizer());
+export const recorderSupported = () => typeof window !== 'undefined' && 'MediaRecorder' in window && !!navigator.mediaDevices?.getUserMedia;
 
-/** Listens once and reports the transcript as it forms; `onFinal` gets the finished sentence. */
+export type VoiceEngine = 'browser' | 'gemini';
+
+/** Longest clip sent for transcription; a spoken question is a few seconds. */
+const MAX_CLIP_MS = 45_000;
+
+function toBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1] ?? '');
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Listens once and reports the transcript as it forms; `onFinal` gets the
+ * finished sentence.
+ *
+ * Two engines. The browser's own recognition (Chrome, Edge) shows words as
+ * they are spoken. Where the browser has none (Firefox, Safari), or when
+ * chosen for better Hindi, the clip is recorded and Gemini writes it down on
+ * the server. `supported` is true when either is available.
+ */
 export function useSpeechInput(lang: 'en' | 'hi', onFinal: (text: string) => void) {
+  const status = useAssistantStatus();
+  const canBrowser = speechSupported();
+  const canGemini = recorderSupported() && !!status.data?.transcription;
+  const [choice, setChoice] = useState<VoiceEngine | null>(null);
+  const engine: VoiceEngine | null = choice === 'gemini' && canGemini ? 'gemini' : choice === 'browser' && canBrowser ? 'browser' : canBrowser ? 'browser' : canGemini ? 'gemini' : null;
+
   const [listening, setListening] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [interim, setInterim] = useState('');
   const [error, setError] = useState<string | null>(null);
   const rec = useRef<Recognition | null>(null);
+  const media = useRef<{ recorder: MediaRecorder; stream: MediaStream; timer: number } | null>(null);
   const finalRef = useRef(onFinal);
   finalRef.current = onFinal;
 
-  const start = useCallback(() => {
-    const R = Recognizer();
-    if (!R) { setError('This browser has no speech recognition. Use Chrome or Edge.'); return; }
-    setError(null);
-    setInterim('');
+  const startBrowser = useCallback(() => {
+    const R = Recognizer()!;
     const r = new R();
     r.lang = lang === 'hi' ? 'hi-IN' : 'en-IN';
     r.interimResults = true;
@@ -121,7 +163,7 @@ export function useSpeechInput(lang: 'en' | 'hi', onFinal: (text: string) => voi
       }
       setInterim(finalText + text);
     };
-    r.onerror = (e) => setError(e.error === 'not-allowed' ? 'Microphone access was refused. Allow it in the browser to speak.' : `Speech recognition stopped (${e.error}).`);
+    r.onerror = (e) => setError(e.error === 'not-allowed' ? 'Microphone access was refused. Allow it in the browser to speak.' : e.error === 'no-speech' ? 'Nothing was heard. Tap the microphone and speak again.' : `Speech recognition stopped (${e.error}).`);
     r.onend = () => {
       setListening(false);
       if (finalText.trim()) finalRef.current(finalText.trim());
@@ -131,12 +173,73 @@ export function useSpeechInput(lang: 'en' | 'hi', onFinal: (text: string) => voi
     setListening(true);
   }, [lang]);
 
-  const stop = useCallback(() => rec.current?.stop(), []);
+  const startGemini = useCallback(async () => {
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      setError('Microphone access was refused. Allow it in the browser to speak.');
+      return;
+    }
+    const type = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'].find((t) => MediaRecorder.isTypeSupported(t));
+    const recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    recorder.onstop = async () => {
+      window.clearTimeout(media.current?.timer);
+      stream.getTracks().forEach((t) => t.stop());
+      media.current = null;
+      setListening(false);
+      const blob = new Blob(chunks, { type: recorder.mimeType || type || 'audio/webm' });
+      if (blob.size < 1500) { setError('Nothing was heard. Tap the microphone and speak again.'); return; }
+      setTranscribing(true);
+      setInterim('Writing down what you said…');
+      try {
+        const { text } = await api<{ text: string }>('/api/assistant/transcribe', { method: 'POST', body: { audio: await toBase64(blob), mimeType: blob.type, lang } });
+        setInterim(text);
+        if (text.trim()) finalRef.current(text.trim());
+        else setError('Nothing intelligible was heard. Try again a little closer to the microphone.');
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message : 'The voice clip could not be sent. Check your connection.');
+        setInterim('');
+      } finally {
+        setTranscribing(false);
+      }
+    };
+    recorder.start();
+    media.current = { recorder, stream, timer: window.setTimeout(() => recorder.state === 'recording' && recorder.stop(), MAX_CLIP_MS) };
+    setInterim('Recording… tap again when you have finished');
+    setListening(true);
+  }, [lang]);
 
-  useEffect(() => () => rec.current?.stop(), []);
+  const start = useCallback(() => {
+    if (!engine) { setError('This browser cannot take voice input. Use Chrome or Edge, or type the question.'); return; }
+    setError(null);
+    setInterim('');
+    if (engine === 'browser') startBrowser();
+    else void startGemini();
+  }, [engine, startBrowser, startGemini]);
 
-  return { listening, interim, error, start, stop, supported: speechSupported() };
+  const stop = useCallback(() => {
+    rec.current?.stop();
+    if (media.current?.recorder.state === 'recording') media.current.recorder.stop();
+  }, []);
+
+  useEffect(() => () => {
+    rec.current?.stop();
+    if (media.current) { media.current.recorder.state === 'recording' && media.current.recorder.stop(); media.current.stream.getTracks().forEach((t) => t.stop()); }
+  }, []);
+
+  return {
+    listening, transcribing, interim, error, start, stop,
+    supported: engine !== null,
+    engine,
+    /** Both engines are available, so the person may choose. */
+    canChoose: canBrowser && canGemini,
+    setEngine: setChoice,
+  };
 }
+
 
 /** Reads text aloud in Hindi or Indian English, without the markdown. */
 export function speak(text: string, lang: 'en' | 'hi', onEnd?: () => void) {

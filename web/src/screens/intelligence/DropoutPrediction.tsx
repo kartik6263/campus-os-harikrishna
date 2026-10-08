@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { toast, ToastContainer } from '../../components/ui';
+import { copyText, dueIn, sourceLabel, useRiskBrief, type RiskBrief } from '../../lib/ai';
 import {
   INTERVENTION_KINDS,
   OUTCOMES,
@@ -85,11 +86,11 @@ function RiskBadge({ level }: { level: RiskLevel }) {
 }
 
 // Raising an intervention against a student
-function LogInterventionForm({ studentId, onClose }: { studentId: string; onClose: () => void }) {
+function LogInterventionForm({ studentId, onClose, initial }: { studentId: string; onClose: () => void; initial?: { kind: ApiIntervention['kind']; note: string; dueOn: string } }) {
   const raise = useRaiseIntervention();
-  const [kind, setKind] = useState<ApiIntervention['kind']>('COUNSELLING');
-  const [notes, setNotes] = useState('');
-  const [dueOn, setDueOn] = useState('');
+  const [kind, setKind] = useState<ApiIntervention['kind']>(initial?.kind ?? 'COUNSELLING');
+  const [notes, setNotes] = useState(initial?.note ?? '');
+  const [dueOn, setDueOn] = useState(initial?.dueOn ?? '');
 
   async function handleSubmit() {
     try {
@@ -230,9 +231,80 @@ function CloseInterventionForm({
 }
 
 // Detail panel for a student
+/** Gemini's reading of the score: why, what to do, and what to say. */
+function AiBrief({ studentId, onUse }: { studentId: string; onUse: (a: RiskBrief['actions'][number]) => void }) {
+  const brief = useRiskBrief(studentId);
+  const [hindi, setHindi] = useState(false);
+  const d = brief.data;
+  async function copy(text: string) {
+    if (await copyText(text)) toast.success('Copied');
+    else toast.error('Could not copy — select the text instead');
+  }
+  const run = (refresh: boolean) => brief.mutate(refresh, { onError: (e) => toast.error(e instanceof Error ? e.message : 'Could not draft the brief') });
+  return (
+    <div className="rounded-xl p-4 border border-[#7C3AED]/50 bg-gradient-to-br from-[#1E1050]/60 to-[#0D1B35]">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="text-[12px] font-semibold text-purple-200">✦ AI counselling brief</div>
+        {d && <span className="text-[10px] text-purple-300/70">{sourceLabel(d)}</span>}
+      </div>
+      {!d && !brief.isPending && (
+        <>
+          <p className="text-[12px] text-gray-400 mb-3">Explains this score in plain words and drafts the interventions, a way to open the conversation, and a message to the parent. The student's name is not sent.</p>
+          <button onClick={() => run(false)} className="w-full py-2 rounded-lg bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-[13px] font-medium cursor-pointer">Draft the brief</button>
+        </>
+      )}
+      {brief.isPending && <div className="text-[13px] text-purple-200 flex items-center gap-2 py-2"><span className="w-4 h-4 border-2 border-purple-300/30 border-t-purple-200 rounded-full animate-spin" /> Reading the record…</div>}
+      {brief.isError && !brief.isPending && <p className="text-[12px] text-red-300 mt-2">{brief.error instanceof Error ? brief.error.message : 'Failed'}</p>}
+      {d && !brief.isPending && (
+        <div className="flex flex-col gap-3 text-[13px]">
+          {d.notice && <p className="text-[11px] text-amber-300/90">{d.notice}</p>}
+          <p className="text-gray-100">{d.data.summary}</p>
+          <div className="flex flex-col gap-1.5">
+            {d.data.drivers.map((x, i) => <p key={i} className="text-[12px] text-gray-300"><span className="text-purple-200 font-medium">{x.factor}:</span> {x.explanation}</p>)}
+          </div>
+          <div>
+            <div className="text-[11px] text-gray-500 uppercase tracking-wide mb-1.5">Suggested interventions</div>
+            {d.data.actions.length === 0 && <p className="text-[12px] text-gray-400">Every suggested kind is already open for this student.</p>}
+            <div className="flex flex-col gap-2">
+              {d.data.actions.map((a, i) => (
+                <div key={i} className="bg-[#0A1428] border border-[#1E3A5F] rounded-lg p-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="text-[13px] text-white font-medium">{a.title}</div>
+                      <div className="text-[11px] text-gray-500">{kindLabel(a.kind)} · {a.owner} · within {a.dueInDays} day{a.dueInDays > 1 ? 's' : ''}</div>
+                    </div>
+                    <button onClick={() => onUse(a)} className="text-[11px] px-2 py-1 rounded bg-[#7C3AED]/30 text-purple-100 hover:bg-[#7C3AED]/60 cursor-pointer shrink-0">Use this</button>
+                  </div>
+                  <p className="text-[12px] text-gray-300 mt-1">{a.detail}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1"><span className="text-[11px] text-gray-500 uppercase tracking-wide">Opening the conversation</span><button onClick={() => void copy(d.data.mentorOpener)} className="text-[11px] text-purple-300 hover:text-white cursor-pointer">Copy</button></div>
+            <p className="text-[12px] text-gray-300 italic">“{d.data.mentorOpener}”</p>
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[11px] text-gray-500 uppercase tracking-wide">Message to the parent</span>
+              <span className="flex gap-2">
+                <button onClick={() => setHindi(h => !h)} className="text-[11px] text-purple-300 hover:text-white cursor-pointer">{hindi ? 'English' : 'हिंदी'}</button>
+                <button onClick={() => void copy(hindi ? d.data.parentMessageHi : d.data.parentMessage)} className="text-[11px] text-purple-300 hover:text-white cursor-pointer">Copy</button>
+              </span>
+            </div>
+            <p className="text-[12px] text-gray-300" style={hindi ? { fontFamily: 'Noto Sans Devanagari, sans-serif' } : undefined}>{hindi ? d.data.parentMessageHi : d.data.parentMessage}</p>
+          </div>
+          <button onClick={() => run(true)} className="self-start text-[11px] text-purple-300 hover:text-white cursor-pointer">↻ Draft again</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StudentDetailPanel({ student, onClose }: { student: AtRiskStudent; onClose: () => void }) {
   const detail = useRiskDetail(student.id);
   const [showLogForm, setShowLogForm] = useState(false);
+  const [prefill, setPrefill] = useState<{ kind: ApiIntervention['kind']; note: string; dueOn: string } | undefined>(undefined);
   const [closing, setClosing] = useState<string | null>(null);
 
   const current = detail.data?.current;
@@ -345,6 +417,8 @@ function StudentDetailPanel({ student, onClose }: { student: AtRiskStudent; onCl
           </div>
         )}
 
+        <AiBrief key={student.id} studentId={student.id} onUse={(a) => { setPrefill({ kind: a.kind, note: `${a.title}. ${a.detail} (Owner: ${a.owner}.)`, dueOn: dueIn(a.dueInDays) }); setShowLogForm(true); }} />
+
         {/* Projection, if there is anything approved to project from */}
         {projection && projection.projectedPercent !== null && (
           <div className="bg-[#0D1B35] border border-[#1E3A5F] rounded-xl p-4">
@@ -416,7 +490,7 @@ function StudentDetailPanel({ student, onClose }: { student: AtRiskStudent; onCl
 
         {/* Record an intervention */}
         {showLogForm ? (
-          <LogInterventionForm studentId={student.id} onClose={() => setShowLogForm(false)} />
+          <LogInterventionForm key={prefill ? prefill.note : 'blank'} studentId={student.id} initial={prefill} onClose={() => { setShowLogForm(false); setPrefill(undefined); }} />
         ) : (
           <button
             onClick={() => setShowLogForm(true)}

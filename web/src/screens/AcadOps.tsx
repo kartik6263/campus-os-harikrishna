@@ -8,16 +8,20 @@ interface Props { onNavigate: (s: Screen) => void }
 import AdmissionCounselling from './acadops/admission/AdmissionCounselling';
 import SyllabusCurriculum from './acadops/admission/SyllabusCurriculum';
 import AcademicRecords from './acadops/admission/AcademicRecords';
+import StudentLifecycle from './shared/StudentLifecycle';
+import DigitalCertificates from './shared/DigitalCertificates';
 import UniversityLibrary from './acadops/admission/UniversityLibrary';
 import HostelManagement from './acadops/campus/HostelManagement';
 import TransportManagement from './acadops/campus/TransportManagement';
+import AttendanceAdmin from './shared/AttendanceAdmin';
+import TimetableManagement from './shared/TimetableManagement';
 import FeeFinance from './acadops/campus/FeeFinance';
 import UniversityScholarship from './acadops/campus/UniversityScholarship';
 import UniversityGrievance from './acadops/campus/UniversityGrievance';
 import { inst, instPlace } from '../lib/institution';
 
 type Module =
-  | 'admission' | 'curriculum' | 'records' | 'library'
+  | 'admission' | 'lifecycle' | 'attendance' | 'timetable' | 'certificates' | 'curriculum' | 'records' | 'library'
   | 'hostel' | 'transport' | 'fee-finance' | 'scholarship' | 'grievance';
 
 interface NavSection {
@@ -30,6 +34,10 @@ const NAV: NavSection[] = [
     title: 'Admission & Academics',
     items: [
       { id: 'admission', label: 'Admission & Counselling', icon: '📋' },
+      { id: 'lifecycle', label: 'Student Lifecycle', icon: '🔄' },
+      { id: 'attendance', label: 'Attendance', icon: '✅' },
+      { id: 'timetable', label: 'Timetable', icon: '🗓' },
+      { id: 'certificates', label: 'Digital Certificates', icon: '🔏' },
       { id: 'curriculum', label: 'Syllabus & Curriculum', icon: '📖' },
       { id: 'records', label: 'Academic Records', icon: '📁' },
       { id: 'library', label: 'Library', icon: '📚' },
@@ -48,7 +56,7 @@ const NAV: NavSection[] = [
 ];
 
 const MODULE_TITLES: Record<Module, string> = {
-  'admission': 'Admission & Counselling', 'curriculum': 'Syllabus & Curriculum',
+  'admission': 'Admission & Counselling', 'lifecycle': 'Student Lifecycle', 'attendance': 'Attendance', 'timetable': 'Timetable', 'certificates': 'Digital Certificates', 'curriculum': 'Syllabus & Curriculum',
   'records': 'Academic Records', 'library': 'University Library',
   'hostel': 'Hostel Management', 'transport': 'Transport Management',
   'fee-finance': 'Fee & Finance', 'scholarship': 'Scholarship',
@@ -150,10 +158,14 @@ export default function AcadOps({ onNavigate }: Props) {
         <main className="flex-1 min-w-0 overflow-y-auto">
           {module === 'admission' && <AdmissionCounselling onNavigate={onNavigate} />}
           {module === 'curriculum' && <SyllabusCurriculum />}
+          {module === 'lifecycle' && <StudentLifecycle />}
+          {module === 'certificates' && <DigitalCertificates />}
           {module === 'records' && <AcademicRecords />}
           {module === 'library' && <UniversityLibrary />}
           {module === 'hostel' && <HostelManagement />}
           {module === 'transport' && <TransportManagement />}
+          {module === 'attendance' && <AttendanceAdmin />}
+          {module === 'timetable' && <TimetableManagement />}
           {module === 'fee-finance' && <FeeFinance onNavigate={onNavigate} />}
           {module === 'scholarship' && <UniversityScholarship />}
           {module === 'grievance' && <UniversityGrievance />}

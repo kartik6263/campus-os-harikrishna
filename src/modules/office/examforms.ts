@@ -4,7 +4,7 @@ import { prisma } from '../../db.js';
 import { ApiError, asyncHandler, validate } from '../../lib/http.js';
 import { resolveStaffId } from './shared.js';
 import { attendanceFor } from '../faculty/shared.js';
-import { ATTENDANCE_THRESHOLD } from '../student.js';
+import { currentPolicy } from '../attendance/policy.js';
 
 export const examFormsRouter = Router();
 
@@ -27,12 +27,13 @@ export async function scrutinise(formIds: string[]) {
   const studentIds = [...new Set(forms.map((f) => f.studentId))];
   const subjectIds = [...new Set(forms.flatMap((f) => f.subjects.map((s) => s.subjectId)))];
 
-  const [attendance, feeItems] = await Promise.all([
+  const [attendance, feeItems, condonations] = await Promise.all([
     attendanceFor(studentIds, subjectIds),
     prisma.feeItem.findMany({
       where: { studentId: { in: studentIds } },
       select: { studentId: true, amount: true, paid: true },
     }),
+    prisma.attendanceCondonation.findMany({ where: { studentId: { in: studentIds }, status: 'APPROVED' }, select: { studentId: true, term: true } }),
   ]);
 
   const dueByStudent = new Map<string, number>();
@@ -54,11 +55,15 @@ export async function scrutinise(formIds: string[]) {
         present: number;
         held: number;
         eligible: boolean;
+        condoned: boolean;
       }>;
     }
   >();
 
+  const { threshold, condonationFloor } = currentPolicy();
   for (const form of forms) {
+    // An approved condonation for this term lets a shortage down to the floor through.
+    const condoned = condonations.some((c) => c.studentId === form.studentId && c.term === form.term);
     const subjects = form.subjects.map((s) => {
       const cell = attendance.get(`${form.studentId}:${s.subjectId}`);
       const percent = cell?.percent ?? 0;
@@ -70,7 +75,8 @@ export async function scrutinise(formIds: string[]) {
         present: cell?.present ?? 0,
         held: cell?.total ?? 0,
         // A backlog paper is re-sat, so this term's attendance does not gate it.
-        eligible: s.kind === 'BACKLOG' || percent >= ATTENDANCE_THRESHOLD,
+        eligible: s.kind === 'BACKLOG' || percent >= threshold || (condoned && percent >= condonationFloor),
+        condoned: s.kind !== 'BACKLOG' && percent < threshold && condoned && percent >= condonationFloor,
       };
     });
 
@@ -157,7 +163,7 @@ examFormsRouter.get(
     });
 
     res.json({
-      threshold: ATTENDANCE_THRESHOLD,
+      threshold: currentPolicy().threshold,
       totals: {
         total: rows.length,
         eligible: rows.filter((r) => r.computedEligibility === 'ELIGIBLE').length,
@@ -203,7 +209,7 @@ examFormsRouter.post(
       throw ApiError.badRequest(
         computed.computed === 'FEE_DUE'
           ? `This student owes ₹${computed.due}. Clearing anyway needs a written reason.`
-          : `${computed.shortfalls} subject(s) are below ${ATTENDANCE_THRESHOLD}%. Clearing anyway needs a written reason.`,
+          : `${computed.shortfalls} subject(s) are below ${currentPolicy().threshold}%. Clearing anyway needs a written reason.`,
         { computed: computed.computed, feeDue: computed.due, shortfalls: computed.shortfalls },
       );
     }

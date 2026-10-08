@@ -225,11 +225,11 @@ section('QR attendance');
   const after = await call('/api/student/attendance', { token });
   const seBefore = attendanceBefore?.subjects?.find((s) => s.code === 'BCA501');
   const seAfter = after.body?.subjects?.find((s) => s.code === 'BCA501');
-  // The demo session already counted toward "held" before the scan, so only
-  // the present count moves.
+  // A class counts once the lecturer submits its roll call — the same rule on
+  // every screen — so a scan into a class still open does not move the figures yet.
   check(
-    'BCA501 present count went up by one',
-    seAfter?.present === seBefore?.present + 1 && seAfter?.total === seBefore?.total,
+    'a scan into an open class does not count until the roll call is submitted',
+    seAfter?.present === seBefore?.present && seAfter?.total === seBefore?.total,
     `${seBefore?.present}/${seBefore?.total} -> ${seAfter?.present}/${seAfter?.total}`,
   );
 }
@@ -1414,7 +1414,7 @@ let bca501Paper = null;
   const odd = r.body?.find((s) => s.code === 'SES/RDU/2024/ODD');
   examSessionId = odd?.id;
   check('the live sitting has its form window closed', odd?.status === 'FORM_WINDOW_CLOSED');
-  check('and six papers scheduled', odd?.papers === 6, `got ${odd?.papers}`);
+  check('and seven papers scheduled — six of the semester and one backlog', odd?.papers === 7, `got ${odd?.papers}`);
   check('it knows where it can go next', odd?.nextStatus?.includes('IN_PROGRESS'));
 
   check(
